@@ -4,7 +4,7 @@ import mujoco
 import mujoco.viewer
 import time
 import os
-
+from utils import rollout_centroid_positions
 
 def load_marker_data(c3d_path):
     """
@@ -79,11 +79,16 @@ def draw_markers(viewer, marker_positions):
     """
     Draw markers as red spheres in the MuJoCo viewer.
     """
-    for pos in marker_positions:
+    for marker_idx, pos in enumerate(marker_positions):
         # Add a new geometry to the scene if we have space
         if viewer.user_scn.ngeom < viewer.user_scn.maxgeom:
             # Get the next available geometry slot
             geom = viewer.user_scn.geoms[viewer.user_scn.ngeom]
+            
+            color = np.array([1.0, 0.0, 0.0, 1.0])  # Default Red color
+            # draw feet markers in orange
+            if (marker_idx >= 86 and marker_idx < 96) or (marker_idx >= 61 and marker_idx < 71):  # right foot markers and left foot markers
+               color = np.array([1.0, 0.647, 0.0, 1.0])  # Orange
             
             # Initialize the sphere
             mujoco.mjv_initGeom(
@@ -92,14 +97,16 @@ def draw_markers(viewer, marker_positions):
                 size=np.array([0.01, 0, 0]),  # Sphere radius
                 pos=pos,
                 mat=np.identity(3).flatten(),
-                rgba=np.array([1.0, 0.0, 0.0, 1.0])  # Red color
+                rgba=color
             )
             
             # Increment the geometry count
             viewer.user_scn.ngeom += 1
+    
+    return len(marker_positions) # Return the number of markers drawn
 
 
-def draw_grfs(viewer, cop, grf, scale=2):
+def draw_grfs(viewer, cop, grf, scale=.003):
     """
     Draw ground reaction forces as cyan arrows in the MuJoCo viewer.
     """
@@ -128,6 +135,18 @@ def draw_grfs(viewer, cop, grf, scale=2):
         # Increment the geometry count
         viewer.user_scn.ngeom += 1
 
+def draw_centroid_prediction(viewer, centroid_rollout):
+    for com in centroid_rollout:
+        geom = viewer.user_scn.geoms[viewer.user_scn.ngeom]
+        mujoco.mjv_initGeom(
+                    geom,
+                    mujoco.mjtGeom.mjGEOM_SPHERE,
+                    size=np.array([0.02, 0, 0]),  # Sphere radius
+                    pos=com,
+                    mat=np.identity(3).flatten(),
+                    rgba=np.array([0.0, 0.5, 1.0, 1.0])  # Blue-ish color
+                )
+        viewer.user_scn.ngeom += 1
 
 def play_animation(marker_positions, cop, grf, frame_rate=250):
     """
@@ -157,21 +176,37 @@ def play_animation(marker_positions, cop, grf, frame_rate=250):
         viewer.cam.distance = 5.0   # Distance from lookat point
         viewer.cam.elevation = -20  # Camera elevation angle (degrees)
         viewer.cam.azimuth = 45     # Camera azimuth angle (degrees)
-
+        
+        prev_com = np.mean(marker_positions[frame][5:13], axis=0) # torso markers
         while viewer.is_running():
             step_start = time.time()
             
             # Clear previous geometries
             viewer.user_scn.ngeom = 0
-            
+
+            com = np.mean(marker_positions[frame][5:13], axis=0) # torso markers
+            com_vel = (com - prev_com) / dt  # Compute velocity
+
             # Draw current frame
             draw_markers(viewer, marker_positions[frame])
             draw_grfs(viewer, cop[frame], grf[frame])
+
+
+            centroid_rollout = rollout_centroid_positions(mass=69.86, 
+                                                          com_pos=com, 
+                                                          com_vel=com_vel, 
+                                                          cops=cop[frame], 
+                                                          grfs=grf[frame], 
+                                                          frame_rate=frame_rate, 
+                                                          horizon=100)
             
+            draw_centroid_prediction(viewer, centroid_rollout)
+
             # Update viewer
             mujoco.mj_step(model, data)
             viewer.sync()
-            
+            prev_com = com
+
             # Advance frame, ensures loop
             frame = (frame + 1) % max_frames
             
@@ -188,6 +223,12 @@ def main():
     # Example file paths (modify as needed)
     c3d_path = 'data/GroundLink_dataset/mocap/s001_20220513/s001_20220513_ballethighleg_1.c3d'
     grf_path = 'data/GroundLink_dataset/force/s001_force/s001/s001_20220513_ballethighleg_1.npy'
+
+    #c3d_path = 'data/GroundLink_dataset/mocap/s001_20220513/s001_20220513_chair_1.c3d'
+    #grf_path = 'data/GroundLink_dataset/force/s001_force/s001/s001_20220513_chair_1.npy'
+
+    #c3d_path = 'data/GroundLink_dataset/mocap/s005_20220610/s005_20220610_soccerkick_3_full.c3d'
+    #grf_path = 'data/GroundLink_dataset/force/s005_force/s005/s005_soccerkick_full/s005_20220610_soccerkick_3.npy'
     
     marker_positions = load_marker_data(c3d_path)
     print(f"Loaded marker data with shape: {marker_positions.shape}")
@@ -197,7 +238,7 @@ def main():
     print(f"Loaded GRF data with shape: {grf.shape}")
 
     # Start animation
-    play_animation(marker_positions, cop, grf) # Scale GRF by 69.86 to de-normalize subject weight
+    play_animation(marker_positions, cop, grf * 9.81 * 69.86) # Scale GRF by 69.86 to de-normalize subject weight
 
 
 if __name__ == "__main__":
