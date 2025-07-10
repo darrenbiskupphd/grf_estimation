@@ -1,50 +1,9 @@
 import numpy as np
-import ezc3d
 import mujoco
 import mujoco.viewer
 import time
 import os
-from utils import rollout_centroid_positions
-
-def load_marker_data(c3d_path):
-    """
-    Load marker positions from C3D file.
-    
-    Args:
-        c3d_path: Path to the C3D file
-        
-    Returns:
-        marker_positions: Array of shape (framecount, 99, 3) - marker positions over time
-    """
-    c3d = ezc3d.c3d(c3d_path)
-    
-    # Extract points data: shape (4, 99, framecount)
-    points = c3d['data']['points']
-    marker_positions = points[:3, :, :]  # (3, 99, framecount) ignore the 4th dimension (all 1's)
-    
-    # Transpose to get (framecount, 99, 3)
-    marker_positions = marker_positions.transpose(2, 1, 0)
-    
-    return marker_positions / 1000  # Convert from mm to meters
-
-
-def load_grf_data(npy_path):
-    """
-    Load ground reaction force data from NPY file.
-    
-    Args:
-        npy_path: Path to the NPY file containing force data
-        
-    Returns:
-        cop: Center of pressure data, shape (framecount, 2, 3)
-        grf: Ground reaction force data, shape (framecount, 2, 3)
-    """
-    force_data = np.load(npy_path, allow_pickle=True).item()
-    
-    cop = force_data['CoP']  # (framecount, 2, 3)
-    grf = force_data['GRF']  # (framecount, 2, 3)
-    
-    return cop, grf
+from utils import * 
 
 
 def setup_mujoco_scene():
@@ -84,12 +43,7 @@ def draw_markers(viewer, marker_positions):
         if viewer.user_scn.ngeom < viewer.user_scn.maxgeom:
             # Get the next available geometry slot
             geom = viewer.user_scn.geoms[viewer.user_scn.ngeom]
-            
             color = np.array([1.0, 0.0, 0.0, 1.0])  # Default Red color
-            # draw feet markers in orange
-            if (marker_idx >= 86 and marker_idx < 96) or (marker_idx >= 61 and marker_idx < 71):  # right foot markers and left foot markers
-               color = np.array([1.0, 0.647, 0.0, 1.0])  # Orange
-            
             # Initialize the sphere
             mujoco.mjv_initGeom(
                 geom,
@@ -110,9 +64,12 @@ def draw_grfs(viewer, cop, grf, scale=.003):
     """
     Draw ground reaction forces as cyan arrows in the MuJoCo viewer.
     """
-    for i in range(2):  # Two force plates
+    for i in range(cop.shape[0]):  # Iterate over each force plate
         start = cop[i]  # Center of pressure
-        direction = grf[i] / np.linalg.norm(grf[i])
+        if np.linalg.norm(grf[i]) < 1e-6:  # Skip if force is negligible
+            direction = np.array([0.0, 0.0, -1.0])  # Default direction if no force
+        else:
+            direction = grf[i] / np.linalg.norm(grf[i])
 
         quat = np.zeros(4)
         mujoco.mju_quatZ2Vec(quat, direction) # compute the rotation to align the Z-axis with the force direction, then put into quat vector
@@ -135,20 +92,20 @@ def draw_grfs(viewer, cop, grf, scale=.003):
         # Increment the geometry count
         viewer.user_scn.ngeom += 1
 
-def draw_centroid_prediction(viewer, centroid_rollout):
-    for com in centroid_rollout:
+def draw_markers_from_list(viewer, marker_list, color=np.array([0.0, 0.5, 1.0, 1.0]), size=0.02):
+    for com in marker_list:
         geom = viewer.user_scn.geoms[viewer.user_scn.ngeom]
         mujoco.mjv_initGeom(
                     geom,
                     mujoco.mjtGeom.mjGEOM_SPHERE,
-                    size=np.array([0.02, 0, 0]),  # Sphere radius
+                    size=np.array([size, 0, 0]),  # Sphere radius
                     pos=com,
                     mat=np.identity(3).flatten(),
-                    rgba=np.array([0.0, 0.5, 1.0, 1.0])  # Blue-ish color
+                    rgba=color
                 )
         viewer.user_scn.ngeom += 1
 
-def play_animation(marker_positions, cop, grf, frame_rate=250):
+def play_animation(marker_positions, cop, grf, subject_mass=70, frame_rate=100):
     """
     Play animation of markers and ground reaction forces.
     
@@ -177,30 +134,37 @@ def play_animation(marker_positions, cop, grf, frame_rate=250):
         viewer.cam.elevation = -20  # Camera elevation angle (degrees)
         viewer.cam.azimuth = 45     # Camera azimuth angle (degrees)
         
-        prev_com = np.mean(marker_positions[frame][5:13], axis=0) # torso markers
+        prev_com = np.mean(marker_positions[frame][0:8], axis=0) # torso markers
         while viewer.is_running():
             step_start = time.time()
-            
             # Clear previous geometries
             viewer.user_scn.ngeom = 0
-
-            com = np.mean(marker_positions[frame][5:13], axis=0) # torso markers
-            com_vel = (com - prev_com) / dt  # Compute velocity
 
             # Draw current frame
             draw_markers(viewer, marker_positions[frame])
             draw_grfs(viewer, cop[frame], grf[frame])
 
 
-            centroid_rollout = rollout_centroid_positions(mass=69.86, 
+
+            ### Centroid Position Estimation and Dynamics Rollout ###
+            # Draw the markers used for centroid position estimation in orange
+            draw_markers_from_list(viewer, marker_positions[frame][0:8], color=np.array([1.0, 0.5, 0.0, 1.0]), size=0.01)
+            # Compute the current center of mass (COM) and its velocity
+            com = np.mean(marker_positions[frame][0:8], axis=0) # torso markers
+            com_vel = (com - prev_com) / dt  # Compute velocity
+            # compute `horizon` number of future centroid positions
+            centroid_rollout = rollout_centroid_positions(mass=subject_mass, 
                                                           com_pos=com, 
                                                           com_vel=com_vel, 
                                                           cops=cop[frame], 
                                                           grfs=grf[frame], 
                                                           frame_rate=frame_rate, 
                                                           horizon=100)
-            
-            draw_centroid_prediction(viewer, centroid_rollout)
+            draw_markers_from_list(viewer, centroid_rollout)
+            ### ###
+
+
+
 
             # Update viewer
             mujoco.mj_step(model, data)
@@ -220,26 +184,34 @@ def main():
     """
     Main function to load data and start visualization.
     """
-    # Example file paths (modify as needed)
-    c3d_path = 'data/GroundLink_dataset/mocap/s001_20220513/s001_20220513_ballethighleg_1.c3d'
-    grf_path = 'data/GroundLink_dataset/force/s001_force/s001/s001_20220513_ballethighleg_1.npy'
+    b3d_path = "data/AddBiomechanicsDataset./test/With_Arm/Fregly2012_Formatted_With_Arm/3GC/3GC.b3d"
+    cop, grf, marker_clouds, subject_mass = load_data_b3d(b3d_path, trial_num=12)
 
-    #c3d_path = 'data/GroundLink_dataset/mocap/s001_20220513/s001_20220513_chair_1.c3d'
-    #grf_path = 'data/GroundLink_dataset/force/s001_force/s001/s001_20220513_chair_1.npy'
+    subject_mass = 56
+    cop, grf, marker_clouds = load_data_jeonghan("data/Jeonghan Yoga/Novices/N001/Warrior_1.csv")
+    cop = lowpass_filter(cop, cutoff_freq=10, fs=2000)
+    grf = lowpass_filter(grf, cutoff_freq=10, fs=2000)
+    for i in range(marker_clouds.shape[1]):
+        marker_clouds[:,i, 0] = lowpass_filter(marker_clouds[:,i, 0], cutoff_freq=20, fs=100)
+        marker_clouds[:,i, 1] = lowpass_filter(marker_clouds[:,i, 1], cutoff_freq=20, fs=100)
+        marker_clouds[:,i, 2] = lowpass_filter(marker_clouds[:,i, 2], cutoff_freq=20, fs=100)
 
-    #c3d_path = 'data/GroundLink_dataset/mocap/s005_20220610/s005_20220610_soccerkick_3_full.c3d'
-    #grf_path = 'data/GroundLink_dataset/force/s005_force/s005/s005_soccerkick_full/s005_20220610_soccerkick_3.npy'
+    # Downsample cop and grf to match the number of frames in marker_clouds
+    num_marker_frames = marker_clouds.shape[0]
+    num_grf_frames = grf.shape[0]
     
-    marker_positions = load_marker_data(c3d_path)
-    print(f"Loaded marker data with shape: {marker_positions.shape}")
-    
-    cop, grf = load_grf_data(grf_path)
-    print(f"Loaded CoP data with shape: {cop.shape}")
-    print(f"Loaded GRF data with shape: {grf.shape}")
-
+    if num_grf_frames > num_marker_frames:
+        # Calculate the downsampling ratio
+        ratio = float(num_grf_frames) / float(num_marker_frames)
+        # Create indices for downsampling
+        indices = np.arange(num_marker_frames) * ratio
+        indices = np.round(indices).astype(int)
+        # Downsample the data
+        cop = cop[indices]
+        grf = grf[indices]
+        
     # Start animation
-    play_animation(marker_positions, cop, grf * 9.81 * 69.86) # Scale GRF by 69.86 to de-normalize subject weight
-
+    play_animation(marker_clouds, cop, grf, subject_mass=subject_mass, frame_rate=100)
 
 if __name__ == "__main__":
     main()
