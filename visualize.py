@@ -4,6 +4,7 @@ import mujoco.viewer
 import time
 import os
 from utils import * 
+import time as _time
 
 
 def setup_mujoco_scene():
@@ -134,7 +135,7 @@ def play_animation(marker_positions, cop, grf, subject_mass=70, frame_rate=100):
         viewer.cam.elevation = -20  # Camera elevation angle (degrees)
         viewer.cam.azimuth = 45     # Camera azimuth angle (degrees)
         
-        prev_com = np.mean(marker_positions[frame][0:8], axis=0) # torso markers
+        prev_com = np.nanmean(marker_positions[frame][0:8], axis=0) # torso markers
         while viewer.is_running():
             step_start = time.time()
             # Clear previous geometries
@@ -150,21 +151,27 @@ def play_animation(marker_positions, cop, grf, subject_mass=70, frame_rate=100):
             # Draw the markers used for centroid position estimation in orange
             draw_markers_from_list(viewer, marker_positions[frame][0:8], color=np.array([1.0, 0.5, 0.0, 1.0]), size=0.01)
             # Compute the current center of mass (COM) and its velocity
-            com = np.mean(marker_positions[frame][0:8], axis=0) # torso markers
+            com = np.nanmean(marker_positions[frame][0:8], axis=0) # torso markers
             com_vel = (com - prev_com) / dt  # Compute velocity
             # compute `horizon` number of future centroid positions
-            centroid_rollout = rollout_centroid_positions(mass=subject_mass, 
+            start_time = _time.time()
+            centroid_rollout = rollout_centroid_qp(mass=subject_mass, 
                                                           com_pos=com, 
                                                           com_vel=com_vel, 
                                                           cops=cop[frame], 
                                                           grfs=grf[frame], 
-                                                          frame_rate=frame_rate, 
-                                                          horizon=100)
+                                                          frame_rate=frame_rate,
+                                                          horizon=50)
+            elapsed_time = _time.time() - start_time
+            print(f"rollout_centroid_positions computation time: {elapsed_time:.6f} seconds")
             draw_markers_from_list(viewer, centroid_rollout)
             ### ###
 
 
-
+            # Draw Extrapolated COM
+            omega = np.sqrt(9.81/com[2])
+            xcom = com + com_vel/omega
+            draw_markers_from_list(viewer, [xcom], color=np.array([0.0, 1.0, 0.0, 1.0]), size=0.02)
 
             # Update viewer
             mujoco.mj_step(model, data)
@@ -188,13 +195,13 @@ def main():
     cop, grf, marker_clouds, subject_mass = load_data_b3d(b3d_path, trial_num=12)
 
     subject_mass = 56
-    cop, grf, marker_clouds = load_data_jeonghan("data/Jeonghan Yoga/Novices/N001/Warrior_1.csv")
-    cop = lowpass_filter(cop, cutoff_freq=10, fs=2000)
+    cop, grf, marker_clouds = load_data_jeonghan("data/Jeonghan Yoga/Novices/N001/Revolved_Triangle.csv")
+    cop = lowpass_filter(cop, cutoff_freq=2, fs=2000)
     grf = lowpass_filter(grf, cutoff_freq=10, fs=2000)
     for i in range(marker_clouds.shape[1]):
-        marker_clouds[:,i, 0] = lowpass_filter(marker_clouds[:,i, 0], cutoff_freq=20, fs=100)
-        marker_clouds[:,i, 1] = lowpass_filter(marker_clouds[:,i, 1], cutoff_freq=20, fs=100)
-        marker_clouds[:,i, 2] = lowpass_filter(marker_clouds[:,i, 2], cutoff_freq=20, fs=100)
+        marker_clouds[:,i, 0] = lowpass_filter(marker_clouds[:,i, 0], cutoff_freq=10, fs=100)
+        marker_clouds[:,i, 1] = lowpass_filter(marker_clouds[:,i, 1], cutoff_freq=10, fs=100)
+        marker_clouds[:,i, 2] = lowpass_filter(marker_clouds[:,i, 2], cutoff_freq=10, fs=100)
 
     # Downsample cop and grf to match the number of frames in marker_clouds
     num_marker_frames = marker_clouds.shape[0]

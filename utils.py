@@ -3,9 +3,11 @@ import ezc3d
 import nimblephysics as nimble
 import pandas as pd
 from scipy.signal import butter, filtfilt
+import jax
+import jax.numpy as jnp
 
-
-def rollout_centroid_positions(
+#speedy implemementation of homogeneous input case
+def rollout_centroid_positions_vectorized(
     mass: float,
     com_pos: np.ndarray,
     com_vel: np.ndarray,
@@ -20,7 +22,6 @@ def rollout_centroid_positions(
     dt = 1.0 / frame_rate
     g = np.array([0, 0, -9.81])
     # Repeat GRFs for horizon steps (assume constant over horizon)
-    #print(f"GRFs shape: {grfs.shape}")
     total_grf = grfs.sum(axis=0)
     total_force = np.tile(total_grf + mass * g, (horizon, 1))
     acc = total_force / mass  # (horizon, 3)
@@ -30,6 +31,91 @@ def rollout_centroid_positions(
     pos_steps = com_pos + np.cumsum(vel_steps, axis=0) * dt
     return [pos_steps[i] for i in range(horizon)]
 
+@jax.jit 
+def rollout_centroid_qp_compiled(
+    mass: float,
+    com_pos: jax.Array,
+    com_vel: jax.Array,
+    cops: jax.Array,
+    grfs: jax.Array,
+    frame_rate: float,
+) -> np.ndarray:
+
+    cop_midpoint = jnp.mean(cops, axis=0) ## placeholder for future use
+    dt = 1.0 / frame_rate
+    g = 9.81
+    horizon = 50
+
+    Ac = jnp.zeros((7, 7))
+    # Velocity affects position
+    Ac = Ac.at[0, 3].set(1)
+    Ac = Ac.at[1, 4].set(1)
+    Ac = Ac.at[2, 5].set(1)
+    Ac = Ac.at[3, 6].set((grfs[0,0] + grfs[1,0]) / mass)
+    Ac = Ac.at[4, 6].set((grfs[0,1] + grfs[1,1]) / mass)
+    Ac = Ac.at[5, 6].set((grfs[0,2] + grfs[1,2]) / mass - g)
+
+    Ad = jnp.eye(7) + dt * Ac + 0.5 * dt**2 * (Ac @ Ac) # 2nd order Euler integration discretization
+    
+    # build the full A matrix for the horizon
+    A_qp = jnp.zeros((7*horizon, 7))
+    A_qp = A_qp.at[:7, :].set(Ad)
+    
+    def body_fun(i, A_prev_rows):
+        start_idx = (i - 1) * 7
+        prev_rows = jax.lax.dynamic_slice(A_prev_rows, (start_idx, 0), (7, 7))
+        curr_rows = Ad @ prev_rows
+        return jax.lax.dynamic_update_slice(A_prev_rows, curr_rows, (i * 7, 0))
+
+        
+    A_qp = jax.lax.fori_loop(1, horizon, body_fun, A_qp)
+
+    x0 = jnp.zeros(7)
+    x0 = x0.at[:3].set(com_pos)
+    x0 = x0.at[3:6].set(com_vel)
+    x0 = x0.at[6].set(1.0)
+    
+    rollout = A_qp @ x0
+    rollout = rollout.reshape(horizon, 7)
+    return rollout[:, :3]
+
+def rollout_centroid_qp(
+    mass: float,
+    com_pos: np.ndarray,
+    com_vel: np.ndarray,
+    cops: np.ndarray,
+    grfs: np.ndarray,
+    frame_rate: float,
+    horizon: int,
+) -> list:
+    dt = 1.0 / frame_rate
+    g = 9.81
+
+    Ac = np.zeros((7, 7))
+    # Velocity affects position
+    Ac[0, 3] = 1
+    Ac[1, 4] = 1
+    Ac[2, 5] = 1
+    Ac[3, 6] = (grfs[0,0] + grfs[1,0]) / mass
+    Ac[4, 6] = (grfs[0,1] + grfs[1,1]) / mass
+    Ac[5, 6] = (grfs[0,2] + grfs[1,2]) / mass - g
+
+    Ad = np.eye(7) + dt * Ac + 0.5 * dt**2 * (Ac @ Ac) # # 2nd order Euler integration discretization
+    #Ad = np.eye(7) + dt * Ac # 1st order Euler integration discretization
+    
+    # build the full A matrix for the horizon
+    A_stack = np.zeros((7*horizon, 7))
+    A_stack[:7, :] = Ad
+    for i in range(1, horizon):
+        A_stack[i*7:(i+1)*7, :] = Ad @ A_stack[(i-1)*7:i*7, :]
+
+    x0 = np.zeros(7)
+    x0[:3] = com_pos
+    x0[3:6] = com_vel
+    x0[6] = 1.0
+    rollout = A_stack@x0
+    rollout = rollout.reshape(horizon, 7)
+    return rollout[:, :3]
 
 def load_marker_data(c3d_path):
     """
