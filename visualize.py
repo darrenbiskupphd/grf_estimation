@@ -155,18 +155,25 @@ def play_animation(marker_positions, cop, grf, subject_mass=70, frame_rate=100):
             com_vel = (com - prev_com) / dt  # Compute velocity
             # compute `horizon` number of future centroid positions
             start_time = _time.time()
-            centroid_rollout = rollout_centroid_qp(mass=subject_mass, 
+            centroid_rollout = rollout_optimal_trajectory(mass=subject_mass, 
+                                                          com_pos=com, 
+                                                          com_vel=com_vel, 
+                                                          cops=cop[frame], 
+                                                          grfs=grf[frame], 
+                                                          frame_rate=frame_rate)
+            elapsed_time = _time.time() - start_time
+            if frame % 100 == 0:
+                print(f"rollout_centroid_positions computation time: {elapsed_time:.6f} seconds")
+            draw_markers_from_list(viewer, centroid_rollout)
+            ### ###
+            centroid_rollout = rollout_centroid_positions_vectorized(mass=subject_mass, 
                                                           com_pos=com, 
                                                           com_vel=com_vel, 
                                                           cops=cop[frame], 
                                                           grfs=grf[frame], 
                                                           frame_rate=frame_rate,
                                                           horizon=50)
-            elapsed_time = _time.time() - start_time
-            print(f"rollout_centroid_positions computation time: {elapsed_time:.6f} seconds")
-            draw_markers_from_list(viewer, centroid_rollout)
-            ### ###
-
+            draw_markers_from_list(viewer, centroid_rollout, color=np.array([0.8, 0.2, 0.8, 1.0]))  # Pink/purple color
 
             # Draw Extrapolated COM
             omega = np.sqrt(9.81/com[2])
