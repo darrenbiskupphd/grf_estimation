@@ -5,7 +5,7 @@ import numpy as np
 # Constants
 g = 9.81
 nx, nu = 7, 3  # state and control dimensions
-horizon = 50
+horizon = 40
 
 # Preallocated matrices (global)
 # System dynamics matrices
@@ -21,13 +21,13 @@ x0 = np.zeros(nx)
 y_ref = np.zeros(horizon*nx)
 
 # QP cost matrices (sparse)
-Q_diag = np.array([0, 0, 100, 100, 100, 100, 1])  # weights on state error
-R_diag = 0.01 * np.array([1, 1, 1])  # weights on control effort
+Q_diag = np.array([0, 0, 1, .1, .1, .1, 1])  # weights on state error
+R_diag = 1e-6 * np.array([1, 1, 1])  # weights on control effort
 # Terminal cost weights
-Qf_diag = np.array([0, 0, 1000, 500, 500, 500, 1])  
+Qf_diag = np.array([0, 0, 1, 1, 1, 1, 1])  
 
 # Control limits
-u_min = np.array([-50.0, -50.0, -10.0])
+u_min = np.array([-50.0, -50.0, 0.0])
 u_max = np.array([50.0, 50.0, 0.0])  # Will be updated with mass*g
 c_lower = np.tile(u_min, horizon)
 c_upper = np.tile(u_max, horizon)
@@ -64,9 +64,9 @@ def rollout_optimal_trajectory(
     Bc[4, 1] = 1 / mass
     Bc[5, 2] = 1 / mass
 
-    # Discretize the A and B matrices
+    # Discretize the A and B matrices (first order Euler)
     np.multiply(dt, Bc, out=Bd)  # Bd = dt*Bc
-    Ad[:] = np.eye(7)  # Set Ad to identity
+    Ad[:] = np.eye(nx)  # Set Ad to identity
     np.add(Ad, dt * Ac, out=Ad)  # Ad += dt*Ac
     
     # Build the full A matrix for the horizon
@@ -91,16 +91,16 @@ def rollout_optimal_trajectory(
 
     # Update reference trajectory (only the z-coordinate changes)
     y_ref.fill(0)  # Reset all values to zero
-    y_ref[2::nx] = 2  # Set desired z-height (every nx elements starting from index 2)
+    y_ref[2::nx] = 1  # Set desired z-height (every nx elements starting from index 2)
 
-    # Calculate QP matricesg
+    # Calculate QP matrices
     A_qp_x0 = A_qp @ x0
     # H = 2*(B_qp.T @ L @ B_qp + K) - already sparse
     H = 2 * (B_qp.T @ L @ B_qp + K)
     G = 2 * B_qp.T @ L @ (A_qp_x0 - y_ref)
     
     # Update upper control limit based on mass
-    c_upper[2::nu] = mass * g  # Update z-force upper limits
+    c_upper[2::nu] = .8 * mass * g  # Update z-force upper limits
 
     # Solve quadratic program
     prob = osqp.OSQP()
@@ -120,6 +120,6 @@ def rollout_optimal_trajectory(
 
     # Calculate rollout without creating intermediate large matrices
     rollout = A_qp_x0 + B_qp @ U
-    return rollout.reshape(horizon, nx)[:, :3]
+    return rollout.reshape(horizon, nx)[:, :3] , np.round(U[:3], 4)
 
 

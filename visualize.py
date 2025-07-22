@@ -135,7 +135,9 @@ def play_animation(marker_positions, cop, grf, subject_mass=70, frame_rate=100):
         viewer.cam.elevation = -20  # Camera elevation angle (degrees)
         viewer.cam.azimuth = 45     # Camera azimuth angle (degrees)
         
-        prev_com = np.nanmean(marker_positions[frame][0:8], axis=0) # torso markers
+
+        markers_for_centroid = np.array([1, 3, 31, 11, 16, 17, 26, 27, 29, 39, 44, 45 ,54, 55, 56, 58])
+        prev_com = np.nanmean(marker_positions[frame][markers_for_centroid], axis=0) # torso markers
         while viewer.is_running():
             step_start = time.time()
             # Clear previous geometries
@@ -146,25 +148,24 @@ def play_animation(marker_positions, cop, grf, subject_mass=70, frame_rate=100):
             draw_grfs(viewer, cop[frame], grf[frame])
 
 
-
             ### Centroid Position Estimation and Dynamics Rollout ###
             # Draw the markers used for centroid position estimation in orange
-            draw_markers_from_list(viewer, marker_positions[frame][0:8], color=np.array([1.0, 0.5, 0.0, 1.0]), size=0.01)
+            draw_markers_from_list(viewer, marker_positions[frame][markers_for_centroid], color=np.array([1.0, 0.5, 0.0, 1.0]), size=0.01)
             # Compute the current center of mass (COM) and its velocity
-            com = np.nanmean(marker_positions[frame][0:8], axis=0) # torso markers
+            com = np.nanmean(marker_positions[frame][markers_for_centroid], axis=0) # torso markers
             com_vel = (com - prev_com) / dt  # Compute velocity
             # compute `horizon` number of future centroid positions
-            start_time = _time.time()
-            centroid_rollout = rollout_optimal_trajectory(mass=subject_mass, 
-                                                          com_pos=com, 
-                                                          com_vel=com_vel, 
-                                                          cops=cop[frame], 
-                                                          grfs=grf[frame], 
-                                                          frame_rate=frame_rate)
-            elapsed_time = _time.time() - start_time
-            if frame % 100 == 0:
-                print(f"rollout_centroid_positions computation time: {elapsed_time:.6f} seconds")
-            draw_markers_from_list(viewer, centroid_rollout)
+            # start_time = _time.time()
+            # centroid_rollout, _ = rollout_optimal_trajectory(mass=subject_mass, 
+            #                                               com_pos=com, 
+            #                                               com_vel=com_vel, 
+            #                                               cops=cop[frame], 
+            #                                               grfs=grf[frame], 
+            #                                               frame_rate=frame_rate)
+            # elapsed_time = _time.time() - start_time
+            # if frame % 100 == 0:
+            #     print(f"rollout_centroid_positions computation time: {elapsed_time:.6f} seconds")
+            # draw_markers_from_list(viewer, centroid_rollout, color=np.array([0.8, 0.2, 0.8, 1.0])) # Pink/purple color
             ### ###
             centroid_rollout = rollout_centroid_positions_vectorized(mass=subject_mass, 
                                                           com_pos=com, 
@@ -173,7 +174,7 @@ def play_animation(marker_positions, cop, grf, subject_mass=70, frame_rate=100):
                                                           grfs=grf[frame], 
                                                           frame_rate=frame_rate,
                                                           horizon=50)
-            draw_markers_from_list(viewer, centroid_rollout, color=np.array([0.8, 0.2, 0.8, 1.0]))  # Pink/purple color
+            draw_markers_from_list(viewer, centroid_rollout) # blue
 
             # Draw Extrapolated COM
             omega = np.sqrt(9.81/com[2])
@@ -201,28 +202,8 @@ def main():
     b3d_path = "data/AddBiomechanicsDataset./test/With_Arm/Fregly2012_Formatted_With_Arm/3GC/3GC.b3d"
     cop, grf, marker_clouds, subject_mass = load_data_b3d(b3d_path, trial_num=12)
 
-    subject_mass = 56
-    cop, grf, marker_clouds = load_data_jeonghan("data/Jeonghan Yoga/Novices/N001/Revolved_Triangle.csv")
-    cop = lowpass_filter(cop, cutoff_freq=2, fs=2000)
-    grf = lowpass_filter(grf, cutoff_freq=10, fs=2000)
-    for i in range(marker_clouds.shape[1]):
-        marker_clouds[:,i, 0] = lowpass_filter(marker_clouds[:,i, 0], cutoff_freq=10, fs=100)
-        marker_clouds[:,i, 1] = lowpass_filter(marker_clouds[:,i, 1], cutoff_freq=10, fs=100)
-        marker_clouds[:,i, 2] = lowpass_filter(marker_clouds[:,i, 2], cutoff_freq=10, fs=100)
-
-    # Downsample cop and grf to match the number of frames in marker_clouds
-    num_marker_frames = marker_clouds.shape[0]
-    num_grf_frames = grf.shape[0]
-    
-    if num_grf_frames > num_marker_frames:
-        # Calculate the downsampling ratio
-        ratio = float(num_grf_frames) / float(num_marker_frames)
-        # Create indices for downsampling
-        indices = np.arange(num_marker_frames) * ratio
-        indices = np.round(indices).astype(int)
-        # Downsample the data
-        cop = cop[indices]
-        grf = grf[indices]
+    #subject_mass = 56
+    #cop, grf, marker_clouds = load_data_jeonghan("data/Jeonghan Yoga/Novices/N001/Revolved_Triangle.csv")
         
     # Start animation
     play_animation(marker_clouds, cop, grf, subject_mass=subject_mass, frame_rate=100)

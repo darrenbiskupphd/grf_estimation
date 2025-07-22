@@ -108,7 +108,30 @@ def load_data_jeonghan(csv_path):
     num_markers = marker_clouds.shape[1] // 3
     marker_clouds = marker_clouds.iloc[:, :num_markers*3].to_numpy().reshape(marker_clouds.shape[0], num_markers, 3)
 
-    return cop.astype(np.float64)/1000, -1*grf.astype(np.float64), marker_clouds.astype(np.float64)/1000
+    cop, grf, marker_clouds = cop.astype(np.float64)/1000, -1*grf.astype(np.float64), marker_clouds.astype(np.float64)/1000 # Convert to meters and invert the y-axis for GRF
+
+    cop = lowpass_filter(cop, cutoff_freq=10, fs=2000)
+    grf = lowpass_filter(grf, cutoff_freq=10, fs=2000)
+    for i in range(marker_clouds.shape[1]):
+        marker_clouds[:,i, 0] = lowpass_filter(marker_clouds[:,i, 0], cutoff_freq=10, fs=100)
+        marker_clouds[:,i, 1] = lowpass_filter(marker_clouds[:,i, 1], cutoff_freq=10, fs=100)
+        marker_clouds[:,i, 2] = lowpass_filter(marker_clouds[:,i, 2], cutoff_freq=10, fs=100)
+
+    # Downsample cop and grf to match the number of frames in marker_clouds
+    num_marker_frames = marker_clouds.shape[0]
+    num_grf_frames = grf.shape[0]
+    
+    if num_grf_frames > num_marker_frames:
+        # Calculate the downsampling ratio
+        ratio = float(num_grf_frames) / float(num_marker_frames)
+        # Create indices for downsampling
+        indices = np.arange(num_marker_frames) * ratio
+        indices = np.round(indices).astype(int)
+        # Downsample the data
+        cop = cop[indices]
+        grf = grf[indices]
+
+    return cop, grf, marker_clouds
 
 
 def load_data_b3d(b3d_path, trial_num=0):
@@ -138,7 +161,7 @@ def load_data_b3d(b3d_path, trial_num=0):
     for i, frame in enumerate(frames):
         cop[i] = frame.rawForcePlateCenterOfPressures
         grf[i] = frame.rawForcePlateForces
-        observed_markers = [pos[1] for pos in frame.markerObservations]
+        observed_markers = [obs[1] for obs in frame.markerObservations]
         num_observed = len(observed_markers)
         if num_observed > 0:
             marker_clouds[i, :num_observed, :] = np.array(observed_markers)
