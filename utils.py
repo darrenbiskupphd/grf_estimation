@@ -156,7 +156,7 @@ def load_data_b3d(b3d_path, trial_num=0):
     num_force_plates = subject.getNumForcePlates(trial=trial)
     cop = np.zeros((len(frames), num_force_plates, 3))  # Center of pressure
     grf = np.zeros((len(frames), num_force_plates, 3))  # Ground reaction forces
-    num_markers = len(frames[0].markerObservations)
+    num_markers = max(len(frame.markerObservations) for frame in frames)
     marker_clouds = np.zeros((len(frames), num_markers, 3))
     for i, frame in enumerate(frames):
         cop[i] = frame.rawForcePlateCenterOfPressures
