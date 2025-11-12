@@ -162,14 +162,11 @@ def main():
     """
     Main function to load data and start visualization.
     """
-    b3d_path = "data/AddBiomechanicsDataset./train/With_Arm/Han2023_Formatted_With_Arm/s004_split1/s004_split1.b3d"
-    cop, grf, marker_clouds, subject_mass = load_data_b3d(b3d_path, trial_num=0) ## sometimes each recording has multiple "trials"
-
-    #subject_mass = 56
-    #cop, grf, marker_clouds = load_data_jeonghan("data/Jeonghan Yoga/Novices/N001/Revolved_Triangle.csv")
+    b3d_path = "data/AddBiomechanicsDataset/train/With_Arm/Han2023_Formatted_With_Arm/s006_split1/s006_split1.b3d"
+    cop, grf, marker_clouds, subject_mass, freq = load_data_b3d(b3d_path,trial_num=5) ## sometimes each recording has multiple "trials"
         
     # Start animation
-    play_animation(marker_clouds, cop, grf, subject_mass=subject_mass, frame_rate=240) ## usually 100 or 240 hz
+    play_animation(marker_clouds, cop, grf, subject_mass=subject_mass, frame_rate=freq)
 
 if __name__ == "__main__":
     main()

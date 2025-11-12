@@ -170,7 +170,7 @@ def load_data_b3d(b3d_path, trial_num=0):
     grf = grf[:, :, [0, 2, 1]]
     marker_clouds = marker_clouds[:, :, [0, 2, 1]]
 
-    return cop, grf, marker_clouds, subject.getMassKg()
+    return cop, grf, marker_clouds, subject.getMassKg(), 1/subject.getTrialTimestep(trial)
 
 def lowpass_filter(data: np.ndarray, cutoff_freq: float, fs: float) -> np.ndarray:
     nyquist = 0.5 * fs
