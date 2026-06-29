@@ -1,2 +1,4 @@
 data/
 contexts/
+.vscode/
+pyrefly.toml
