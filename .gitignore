@@ -1,4 +1,6 @@
 data/
 contexts/
 .vscode/
+build/
 pyrefly.toml
+MUJOCO_LOG.TXT
