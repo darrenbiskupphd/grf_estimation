@@ -18,7 +18,7 @@ set(MUJOCO_BUILD_EXAMPLES OFF)
 set(MUJOCO_BUILD_TESTS    OFF)
 
 include(FetchContent)
-# Fetch and build GLFW hermetically for Wayland natively (Must be BEFORE MuJoCo!)
+# Fetch and build GLFW hermetically (Must be BEFORE MuJoCo!)
 FetchContent_Declare(
   glfw
   GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -27,8 +27,6 @@ FetchContent_Declare(
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_WAYLAND ON CACHE BOOL "" FORCE)
-set(GLFW_BUILD_X11 OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(glfw)
 
 FetchContent_Declare(
