@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
     }
 
     // Snap markers to the randomized capsule surfaces
-    randomize_marker_positions(m, 7);
+    randomize_marker_positions(m, 7, qmc_index);
 
     auto setup_end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> setup_time = setup_end_time - setup_start_time;

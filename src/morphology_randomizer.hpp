@@ -9,7 +9,7 @@
 void add_qmc_markers_to_spec(mjSpec* spec, int markers_per_body = 7);
 
 // Randomize the positions of the markers on the surfaces of the compiled geometry
-void randomize_marker_positions(mjModel* m, int markers_per_body = 7);
+void randomize_marker_positions(mjModel* m, int markers_per_body, int global_qmc_index);
 
 // Domain Randomization: Mutate the mjSpec geometry using QMC (Halton) sequence
 void randomize_mjspec_geometry(mjSpec* spec, int qmc_index);

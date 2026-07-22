@@ -104,8 +104,9 @@ void add_qmc_markers_to_spec(mjSpec* spec, int markers_per_body) {
     }
 }
 
-void randomize_marker_positions(mjModel* m, int markers_per_body) {
-    int qmc_index = 1;
+void randomize_marker_positions(mjModel* m, int markers_per_body, int global_qmc_index) {
+    // Offset the index into a non-overlapping range so each episode gets unique markers.
+    int qmc_index = global_qmc_index * 1000;
     
     // Iterate through compiled sites and randomize position for procedural ones
     for (int s = 0; s < m->nsite; ++s) {
