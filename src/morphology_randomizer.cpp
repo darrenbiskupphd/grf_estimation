@@ -1,20 +1,83 @@
-#include "qmc_markers.hpp"
+#include "morphology_randomizer.hpp"
 #include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
 
-// Halton sequence generator for low-discrepancy pseudo-random numbers
+// Halton sequence generator for QMC sampling
 double halton(int index, int base) {
+    double f = 1.0;
     double result = 0.0;
-    double f = 1.0 / base;
-    int i = index;
-    while (i > 0) {
-        result = result + f * (i % base);
-        i = i / base;
+    while (index > 0) {
         f = f / base;
+        result = result + f * (index % base);
+        index = index / base;
     }
     return result;
+}
+
+// Map a [0,1] value to a uniform range [min, max]
+double map_uniform(double value, double min, double max) {
+    return min + value * (max - min);
+}
+
+void randomize_mjspec_geometry(mjSpec* spec, int qmc_index) {
+    // Generate Uniform QMC scale factors for global height and mass variance.
+    // Since classic scaling models are linear (L = c*H, m = c*M), the segment variance 
+    // is mathematically identical to the variance of the global Height and Mass!
+    // We use a tight 3-sigma bound of ±10% to ensure resulting segment mass remains realistic.
+    double L_scale = map_uniform(halton(qmc_index, 2), 0.90, 1.10);
+    double r_scale = map_uniform(halton(qmc_index, 3), 0.90, 1.10);
+
+    for (mjsElement* el = mjs_firstElement(spec, mjOBJ_BODY); el != nullptr; el = mjs_nextElement(spec, el)) {
+        mjsBody* b = mjs_asBody(el);
+        if (b->name && b->name->compare("world") == 0) continue;
+
+        // Scale body position (this shifts child joints down correctly)
+        b->pos[0] *= L_scale;
+        b->pos[1] *= L_scale;
+        b->pos[2] *= L_scale;
+
+        // Scale explicit mass (volumetric change assuming constant density)
+        // This ensures the humanoid doesn't just get taller while keeping the same exact weight!
+        double V_scale = r_scale * r_scale * L_scale;
+        b->mass *= V_scale;
+
+        // Also scale explicit inertia tensors loosely based on scaling factors
+        b->inertia[0] *= V_scale * (r_scale * r_scale);
+        b->inertia[1] *= V_scale * (L_scale * L_scale);
+        b->inertia[2] *= V_scale * (L_scale * L_scale);
+
+        // Iterate through all geoms attached to this body
+        for (mjsElement* gel = mjs_firstChild(b, mjOBJ_GEOM, 0); gel != nullptr; gel = mjs_nextChild(b, gel, 0)) {
+            mjsGeom* g = mjs_asGeom(gel);
+            
+            // Only scale primitive collision geometries
+            if (g->type == mjGEOM_CAPSULE || g->type == mjGEOM_CYLINDER || g->type == mjGEOM_SPHERE) {
+                // Radius is always size[0]
+                g->size[0] *= r_scale;
+                
+                // If using fromto, scale the endpoints
+                bool has_fromto = false;
+                for (int i=0; i<6; ++i) {
+                    if (g->fromto[i] != 0.0) has_fromto = true;
+                }
+                
+                if (has_fromto) {
+                    for(int i=0; i<6; ++i) g->fromto[i] *= L_scale;
+                } else {
+                    // Length is size[1]
+                    g->size[1] *= L_scale;
+                    g->size[2] *= L_scale; // Scale other dims just in case
+                }
+                
+                // Also scale geom pos if it's offset from the body
+                g->pos[0] *= L_scale;
+                g->pos[1] *= L_scale;
+                g->pos[2] *= L_scale;
+            }
+        }
+    }
 }
 
 void add_qmc_markers_to_spec(mjSpec* spec, int markers_per_body) {
@@ -23,7 +86,7 @@ void add_qmc_markers_to_spec(mjSpec* spec, int markers_per_body) {
         mjsBody* b = mjs_asBody(el);
         
         // Skip worldbody (we don't attach markers to the environment)
-        if (b->name && (*(b->name) == "world" || *(b->name) == "hand_left" || *(b->name) == "hand_right")) continue;
+        if (b->name && (b->name->compare("world") == 0 || b->name->compare("hand_left") == 0 || b->name->compare("hand_right") == 0)) continue;
         
         // Add exact number of massless sites to the body
         for (int i = 0; i < markers_per_body; ++i) {

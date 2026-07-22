@@ -213,4 +213,5 @@
             0 0 0 0
             0 0 0 0"/>
   </keyframe>
+  <include file="mjpc_task_walk.xml"/>
 </mujoco>

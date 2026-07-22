@@ -47,9 +47,12 @@ The exact volume $V$ of a MuJoCo capsule is the sum of a cylinder and a spherica
 During data generation, the simulation script applies independent uniform noise to the nominal $L_i$ and $r_i$ values derived above. MuJoCo's compiler then automatically resolves the updated localized mass and inertia tensor for that specific mutated segment on the fly.
 
 
-Here is the explicit mapping of Winter's 50th percentile male (75kg, 1.75m) to the XML variables. This table directly reflects the values computed by the cubic root solver.
+Here is the explicit mapping of Winter's 50th percentile male (75kg, 1.75m) and Plagenhoef's standard female (61kg, 1.63m) to the XML variables. These tables directly reflect the mean proportional data reported in their respective textbooks.
 
-| Anatomical Segment | Winter Mass Fraction | Target Mass (m) | Winter Length Fraction | Target Length (L) | XML Target name | Imputed Size (r) |
+### Winter (1990) - Standard Male (75 kg, 1.75 m)
+*Note: Winter (1990) reports deterministic scaling proportions (means) and does not provide segment-specific standard deviations for these scaling factors.*
+
+| Anatomical Segment | Mass Fraction | Target Mass (m) | Length Fraction | Target Length (L) | XML Target name | Imputed Size (r) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | Head | 0.081 M | 6.07 kg | - | - | `head` | 0.113 m |
 | Trunk (Total) | 0.497 M | 37.27 kg | 0.300 H | 0.525 m | - | - |
@@ -60,29 +63,23 @@ Here is the explicit mapping of Winter's 50th percentile male (75kg, 1.75m) to t
 | Forearm | 0.016 M | 1.20 kg | 0.146 H | 0.255 m | `lower_arm_left`, `lower_arm_right` | 0.036 m |
 | Foot (Total) | 0.0145 M | 1.09 kg | 0.152 H | 0.266 m | `foot_*`, `toe_*` | 0.027 m |
 
+### Plagenhoef (1983) - Standard Female (61 kg, 1.63 m)
+*Note: Plagenhoef (1983) similarly reports fixed anatomical proportions and does not provide standard deviations for segment lengths.*
+
+| Anatomical Segment | Mass Fraction | Target Mass (m) | Length Fraction | Target Length (L) | XML Target name | Imputed Size (r) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Head | 0.071 M | 4.33 kg | - | - | `head` | 0.101 m |
+| Trunk (Total) | 0.461 M | 28.12 kg | 0.300 H | 0.489 m | - | - |
+| Trunk (Per Capsule) | - | 7.03 kg | - | 0.122 m | `torso`, `waist_upper`, `waist_lower`, `butt`| 0.096 m |
+| Thigh | 0.117 M | 7.14 kg | 0.245 H | 0.399 m | `thigh_left`, `thigh_right` | 0.069 m |
+| Shin | 0.046 M | 2.81 kg | 0.246 H | 0.401 m | `shin_left`, `shin_right` | 0.047 m |
+| Upper Arm | 0.027 M | 1.65 kg | 0.186 H | 0.303 m | `upper_arm_left`, `upper_arm_right` | 0.042 m |
+| Forearm | 0.016 M | 0.98 kg | 0.146 H | 0.238 m | `lower_arm_left`, `lower_arm_right` | 0.036 m |
+| Foot (Total) | 0.0140 M | 0.85 kg | 0.152 H | 0.248 m | `foot_*`, `toe_*` | 0.026 m |
+
 Male Spinal Kinematic Offsets (pos Z-translation)
 
 - Head: $0.207$ m
 - Lumbar (waist_lower): $-0.283$ m
 - Pelvis (pelvis): $-0.180$ m
 - Hip Sockets (thigh): $-0.044$ m
-
-Female Baseline Parameters (M = 60 kg, H = 1.63 m)
-
-| Anatomical Segment | Mass Fraction | Target Mass (m) | Length Fraction | Target Length (L) | Imputed Size (r) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| Head | 0.0820 M | 4.92 kg | - | - | 0.105 m |
-| Trunk (Total) | 0.4684 M | 28.10 kg | 0.300 H | 0.489 m | - |
-| Trunk (Per Capsule) | - | 7.02 kg | - | 0.140 m | 0.093 m |
-| Thigh | 0.1175 M | 7.05 kg | 0.245 H | 0.399 m | 0.068 m |
-| Shin | 0.0535 M | 3.21 kg | 0.246 H | 0.401 m | 0.047 m |
-| Upper Arm | 0.0265 M | 1.59 kg | 0.186 H | 0.303 m | 0.038 m |
-| Forearm | 0.0137 M | 0.82 kg | 0.146 H | 0.238 m | 0.031 m |
-| Foot (Total) | 0.0145 M | 0.87 kg | 0.152 H | 0.248 m | 0.025 m |
-
-Female Spinal Kinematic Offsets (pos Z-translation) Derived by scaling the nominal male offsets by the height ratio ($S = 1.63 / 1.75 = 0.9314$).
-
-- Head: $0.195$ m
-- Lumbar (waist_lower): $-0.267$ m
-- Pelvis (pelvis): $-0.169$ m
-- Hip Sockets (thigh): $-0.041$ m

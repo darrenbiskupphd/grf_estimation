@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
-#include "qmc_markers.hpp"
+#include "morphology_randomizer.hpp"
 
 struct SimConfig {
     double duration = 1.0;
@@ -72,8 +72,12 @@ void scroll(GLFWwindow* window, double xoffset, double yoffset) {
 // Simulation Core
 void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const SimConfig& config) {
     auto start_time = std::chrono::high_resolution_clock::now();
-    double capture_rate_hz = 600;
-    m->opt.timestep = 1.0 / (capture_rate_hz * 4.0); // for clean multiple of capture rate
+
+    double capture_rate_hz = 600.0;
+    double physics_timestep = 1.0 / (capture_rate_hz * 4.0); // 1/2400
+
+    // Set the high-fidelity physics timestep for recording
+    m->opt.timestep = physics_timestep;
     mjData* d = mj_makeData(m);
 
     int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
@@ -90,10 +94,10 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     
     double next_record_time = 0.0;
 
-    // Headless simulation loop
     StateRecorder recorder(m);
+
+    // Headless Limp Simulation Loop
     while (d->time < config.duration) {
-        for (int i = 0; i < m->nu; ++i) d->ctrl[i] = 0.0;
         mj_step(m, d);
         
         // Record states and physics data synchronously with the target capture rate (600Hz)
@@ -216,6 +220,9 @@ void render_replay(mjModel* m, const std::vector<ReplayFrame>& replay_buffer) {
 int main(int argc, char** argv) {
     SimConfig config;
 
+    std::string model_path = "assets/winter_baseline_male.xml";
+    int qmc_index = 1;
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--duration" && i + 1 < argc) {
@@ -224,22 +231,33 @@ int main(int argc, char** argv) {
             config.render = true;
         } else if (arg == "--output" && i + 1 < argc) {
             config.output_path = argv[++i];
+        } else if (arg == "--model" && i + 1 < argc) {
+            model_path = argv[++i];
+        } else if (arg == "--qmc-index" && i + 1 < argc) {
+            qmc_index = std::stoi(argv[++i]);
         } else {
             std::cerr << "Unknown or malformed argument: " << arg << std::endl;
-            std::cerr << "Usage: " << argv[0] << " [--duration <sec>] [--render] [--output <path>]" << std::endl;
+            std::cerr << "Usage: " << argv[0] << " [--duration <sec>] [--render] [--output <path>] [--model <path>] [--qmc-index <int>]" << std::endl;
             return 1;
         }
     }
 
     char error[1000] = "";
-    mjSpec* spec = mj_parseXML("assets/winter_baseline_male.xml", nullptr, error, 1000);
     
+    std::cout << "Starting episode with " << model_path << " (QMC Index: " << qmc_index << ")" << std::endl;
+
+    auto setup_start_time = std::chrono::high_resolution_clock::now();
+
+    mjSpec* spec = mj_parseXML(model_path.c_str(), nullptr, error, 1000);
     if (!spec) {
         std::cerr << "MuJoCo Load Error: " << error << std::endl;
         return 1;
     }
 
-    // Mutate the spec to add procedural marker sites
+    // Apply geometric Domain Randomization using QMC
+    randomize_mjspec_geometry(spec, qmc_index);
+
+    // Add QMC procedural markers before compilation
     add_qmc_markers_to_spec(spec, 7);
 
     // Compile into final rigorous mjModel
@@ -251,10 +269,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "Compiled model contains " << m->nsite << " sites." << std::endl;
-
-    // Randomize the markers onto the geometric surfaces
+    // Snap markers to the randomized capsule surfaces
     randomize_marker_positions(m, 7);
+
+    auto setup_end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> setup_time = setup_end_time - setup_start_time;
+    std::cout << "Randomization & Compile Wall Time: " << setup_time.count() << " seconds" << std::endl;
 
     // Simulate and optionally render
     std::vector<ReplayFrame> replay_buffer;
@@ -265,5 +285,6 @@ int main(int argc, char** argv) {
     }
 
     mj_deleteModel(m);
+
     return 0;
 }
