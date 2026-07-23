@@ -38,16 +38,6 @@ void randomize_mjspec_geometry(mjSpec* spec, int qmc_index) {
         b->pos[1] *= L_scale;
         b->pos[2] *= L_scale;
 
-        // Scale explicit mass (volumetric change assuming constant density)
-        // This ensures the humanoid doesn't just get taller while keeping the same exact weight!
-        double V_scale = r_scale * r_scale * L_scale;
-        b->mass *= V_scale;
-
-        // Also scale explicit inertia tensors loosely based on scaling factors
-        b->inertia[0] *= V_scale * (r_scale * r_scale);
-        b->inertia[1] *= V_scale * (L_scale * L_scale);
-        b->inertia[2] *= V_scale * (L_scale * L_scale);
-
         // Iterate through all geoms attached to this body
         for (mjsElement* gel = mjs_firstChild(b, mjOBJ_GEOM, 0); gel != nullptr; gel = mjs_nextChild(b, gel, 0)) {
             mjsGeom* g = mjs_asGeom(gel);

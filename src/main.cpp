@@ -5,6 +5,10 @@
 #include <vector>
 #include <chrono>
 #include "morphology_randomizer.hpp"
+#include "mjpc/agent.h"
+#include "mjpc/task.h"
+#include "mjpc/threadpool.h"
+#include "mjpc/tasks/humanoid/stand/stand.h"
 
 struct SimConfig {
     double duration = 1.0;
@@ -69,16 +73,40 @@ void scroll(GLFWwindow* window, double xoffset, double yoffset) {
     mjv_moveCamera(m_viewer, mjMOUSE_ZOOM, 0, -0.05 * yoffset, &scn, &cam);
 }
 
+// Global task pointer for the mjcb_sensor residual callback
+static mjpc::Task* g_task = nullptr;
+static void residual_sensor_cb(const mjModel* m, mjData* d, int stage) {
+    if (stage == mjSTAGE_ACC && g_task) g_task->Residual(m, d, d->sensordata);
+}
+
 // Simulation Core
 void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const SimConfig& config) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    // Physics at 2400Hz, recording at 600Hz, planning every `k` steps
     double capture_rate_hz = 600.0;
-    double physics_timestep = 1.0 / (capture_rate_hz * 4.0); // 1/2400
+    double physics_timestep = 1.0 / (capture_rate_hz * 4.0);
+    constexpr int kPlanEveryNSteps = 12;
 
-    // Set the high-fidelity physics timestep for recording
+    // Set the high-fidelity physics timestep
     m->opt.timestep = physics_timestep;
     mjData* d = mj_makeData(m);
+
+    // --- Stand Task Agent Setup ---
+    auto stand_task = std::make_shared<mjpc::humanoid::Stand>();
+    mjpc::Agent agent(m, stand_task);
+    agent.Initialize(m);
+    agent.Allocate();
+    agent.Reset();
+    agent.plan_enabled = true;
+    agent.estimator_enabled = false;
+
+    // Install residual callback so mj_step triggers cost evaluation
+    g_task = agent.ActiveTask();
+    mjcb_sensor = &residual_sensor_cb;
+
+    // Single planning thread: caller (bash) handles parallelism via multiple processes
+    mjpc::ThreadPool pool(1);
 
     int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
     if (key_id >= 0) {
@@ -89,30 +117,43 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
         std::cerr << "Warning: Keyframe 'drop_impact' not found." << std::endl;
     }
 
-    // Pre-allocate buffer for replay frames
-    replay_buffer.reserve(static_cast<size_t>(config.duration * capture_rate_hz) + 2);
-    
-    double next_record_time = 0.0;
+    // Seed the planner with the initial state
+    mj_forward(m, d);
+    agent.ActiveTask()->Transition(m, d);
+    agent.state.Set(m, d);
+    agent.PlanIteration(&pool);
 
+    replay_buffer.reserve(static_cast<size_t>(config.duration * capture_rate_hz) + 2);
+    double next_record_time = 0.0;
+    int step_count = 0;
     StateRecorder recorder(m);
 
-    // Headless Limp Simulation Loop
     while (d->time < config.duration) {
+        // Run one planning iteration every N physics steps (synchronous, blocks physics)
+        if (step_count % kPlanEveryNSteps == 0) {
+            agent.ActiveTask()->Transition(m, d);
+            agent.state.Set(m, d);
+            agent.PlanIteration(&pool);
+        }
+
+        // Apply the planned action to ctrl
+        agent.ActivePlanner().ActionFromPolicy(
+            d->ctrl, agent.state.state().data(), agent.state.time(), false);
+
         mj_step(m, d);
-        
-        // Record states and physics data synchronously with the target capture rate (600Hz)
+        step_count++;
+
         if (d->time >= next_record_time) {
             ReplayFrame frame;
             frame.time = d->time;
             frame.qpos.assign(d->qpos, d->qpos + m->nq);
             frame.qvel.assign(d->qvel, d->qvel + m->nv);
-            
-            // Extract GRF and CoP. Break if the humanoid falls over (non-foot contact).
+
             if (!recorder.extract_physics(m, d, frame)) {
                 std::cout << "Early Termination: Non-foot body contact with floor at t=" << d->time << std::endl;
                 break;
             }
-            
+
             replay_buffer.push_back(frame);
             next_record_time += 1.0 / capture_rate_hz;
         }
@@ -123,6 +164,9 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
         std::cout << "Data saved to " << config.output_path << std::endl;
     }
 
+    // Cleanup
+    mjcb_sensor = nullptr;
+    g_task = nullptr;
     mj_deleteData(d);
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -246,8 +290,6 @@ int main(int argc, char** argv) {
     
     std::cout << "Starting episode with " << model_path << " (QMC Index: " << qmc_index << ")" << std::endl;
 
-    auto setup_start_time = std::chrono::high_resolution_clock::now();
-
     mjSpec* spec = mj_parseXML(model_path.c_str(), nullptr, error, 1000);
     if (!spec) {
         std::cerr << "MuJoCo Load Error: " << error << std::endl;
@@ -272,9 +314,17 @@ int main(int argc, char** argv) {
     // Snap markers to the randomized capsule surfaces
     randomize_marker_positions(m, 7, qmc_index);
 
-    auto setup_end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> setup_time = setup_end_time - setup_start_time;
-    std::cout << "Randomization & Compile Wall Time: " << setup_time.count() << " seconds" << std::endl;
+    // =====================================================================
+    // [DELETE ME] MASS VERIFICATION
+    // =====================================================================
+    double total_mass = 0.0;
+    for (int i = 1; i < m->nbody; ++i) { // Skip worldbody
+        total_mass += m->body_mass[i];
+    }
+    std::cout << "--- MASS VERIFICATION (DELETE ME) ---" << std::endl;
+    std::cout << "Total Body Mass: " << total_mass << " kg" << std::endl;
+    std::cout << "-------------------------------------" << std::endl;
+    // =====================================================================
 
     // Simulate and optionally render
     std::vector<ReplayFrame> replay_buffer;
