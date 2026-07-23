@@ -8,7 +8,7 @@
     <numeric name="sampling_exploration"   data="0.05" />
     <numeric name="gradient_spline_points" data="3" />
     <!-- Height goal: target head-to-feet distance in metres -->
-    <numeric name="residual_Height Goal"   data="1.9 0.0 1.8" />
+    <numeric name="residual_Height Goal"   data="1.9 0.0 2.0" />
   </custom>
 
   <sensor>
