@@ -106,7 +106,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     mjcb_sensor = &residual_sensor_cb;
 
     // Single planning thread: caller (bash) handles parallelism via multiple processes
-    mjpc::ThreadPool pool(1);
+    mjpc::ThreadPool pool(15);
 
     int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
     if (key_id >= 0) {
@@ -123,12 +123,21 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     agent.state.Set(m, d);
     agent.PlanIteration(&pool);
 
-    replay_buffer.reserve(static_cast<size_t>(config.duration * capture_rate_hz) + 2);
+    size_t max_frames = static_cast<size_t>(config.duration * capture_rate_hz) + 2;
+    replay_buffer.resize(max_frames);
+    for (auto& f : replay_buffer) {
+        f.qpos.reserve(m->nq);
+        f.qvel.reserve(m->nv);
+        f.plan_trace.reserve(20000); // Safe upper bound for horizon * traces * 3
+        f.markers.reserve(m->nsite * 3);
+    }
+    
     double next_record_time = 0.0;
     int step_count = 0;
+    size_t frame_idx = 0;
     StateRecorder recorder(m);
 
-    while (d->time < config.duration) {
+    while (d->time < config.duration && frame_idx < max_frames) {
         // Run one planning iteration every N physics steps (synchronous, blocks physics)
         if (step_count % kPlanEveryNSteps == 0) {
             agent.ActiveTask()->Transition(m, d);
@@ -144,20 +153,30 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
         step_count++;
 
         if (d->time >= next_record_time) {
-            ReplayFrame frame;
+            ReplayFrame& frame = replay_buffer[frame_idx];
             frame.time = d->time;
             frame.qpos.assign(d->qpos, d->qpos + m->nq);
             frame.qvel.assign(d->qvel, d->qvel + m->nv);
+
+            if (const mjpc::Trajectory* best = agent.ActivePlanner().BestTrajectory()) {
+                int n_trace = agent.ActiveTask()->num_trace;
+                int trace_len = 3 * n_trace * best->horizon;
+                frame.plan_trace.assign(best->trace.data(), best->trace.data() + trace_len);
+                frame.num_trace = n_trace;
+            }
 
             if (!recorder.extract_physics(m, d, frame)) {
                 std::cout << "Early Termination: Non-foot body contact with floor at t=" << d->time << std::endl;
                 break;
             }
 
-            replay_buffer.push_back(frame);
+            frame_idx++;
             next_record_time += 1.0 / capture_rate_hz;
         }
     }
+    
+    // Shrink buffer to actual recorded frames to drop any unused pre-allocated ones
+    replay_buffer.resize(frame_idx);
 
     if (!config.output_path.empty()) {
         recorder.write_csv(config.output_path, replay_buffer);
@@ -205,10 +224,6 @@ void render_replay(mjModel* m, const std::vector<ReplayFrame>& replay_buffer) {
     mjv_makeScene(m, &scn, 2000);
     mjr_makeContext(m, &con, mjFONTSCALE_150);
 
-    // Enable physics visualizations
-    opt.flags[mjVIS_CONTACTFORCE] = 1;
-    // opt.flags[mjVIS_CONTACTPOINT] = 1;
-
     opt.sitegroup[3] = 1; // Enable rendering for site group 3 (QMC markers)
 
     glfwSetKeyCallback(window, keyboard);
@@ -249,6 +264,42 @@ void render_replay(mjModel* m, const std::vector<ReplayFrame>& replay_buffer) {
         glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
 
         mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
+
+        // Render plan trace (MJPC-style lines)
+        const auto& trace = replay_buffer[frame_idx].plan_trace;
+        int num_trace = replay_buffer[frame_idx].num_trace;
+        if (!trace.empty() && num_trace > 0) {
+            float color[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+            int horizon = trace.size() / (3 * num_trace);
+            for (int i = 0; i < horizon - 1; ++i) {
+                if (scn.ngeom >= scn.maxgeom) break;
+                for (int j = 0; j < num_trace; ++j) {
+                    if (scn.ngeom >= scn.maxgeom) break;
+                    mjv_initGeom(&scn.geoms[scn.ngeom], mjGEOM_LINE, nullptr, nullptr, nullptr, color);
+                    mjv_connector(&scn.geoms[scn.ngeom++], mjGEOM_LINE, 8.0, 
+                                  trace.data() + 3 * num_trace * i + 3 * j, 
+                                  trace.data() + 3 * num_trace * (i + 1) + 3 * j);
+                }
+            }
+        }
+
+        // Clean GRF Arrow Visualization
+        auto draw_grf = [&](const double* cop, const double* grf, float* color) {
+            if (grf[2] > 1.0 && scn.ngeom < scn.maxgeom) { // Draw if vertical force is meaningful
+                double scale = 0.005;
+                double p2[3] = {cop[0] + grf[0] * scale, 
+                                cop[1] + grf[1] * scale, 
+                                cop[2] + grf[2] * scale};
+                mjv_initGeom(&scn.geoms[scn.ngeom], mjGEOM_ARROW, nullptr, nullptr, nullptr, color);
+                mjv_connector(&scn.geoms[scn.ngeom++], mjGEOM_ARROW, 0.015, cop, p2);
+            }
+        };
+
+        const auto& current_frame = replay_buffer[frame_idx];
+        float cyan[4] = {0.0f, 1.0f, 1.0f, 1.0f}; // Opaque Cyan (R, G, B, A)
+        draw_grf(current_frame.cop_left, current_frame.grf_left, cyan);
+        draw_grf(current_frame.cop_right, current_frame.grf_right, cyan);
+
         mjr_render(viewport, &scn, &con);
 
         glfwSwapBuffers(window);
@@ -313,18 +364,6 @@ int main(int argc, char** argv) {
 
     // Snap markers to the randomized capsule surfaces
     randomize_marker_positions(m, 7, qmc_index);
-
-    // =====================================================================
-    // [DELETE ME] MASS VERIFICATION
-    // =====================================================================
-    double total_mass = 0.0;
-    for (int i = 1; i < m->nbody; ++i) { // Skip worldbody
-        total_mass += m->body_mass[i];
-    }
-    std::cout << "--- MASS VERIFICATION (DELETE ME) ---" << std::endl;
-    std::cout << "Total Body Mass: " << total_mass << " kg" << std::endl;
-    std::cout << "-------------------------------------" << std::endl;
-    // =====================================================================
 
     // Simulate and optionally render
     std::vector<ReplayFrame> replay_buffer;

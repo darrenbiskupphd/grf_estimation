@@ -25,6 +25,8 @@ struct ReplayFrame {
     double cop_left[3];
     double cop_right[3];
     std::vector<double> markers; // flattened 3D coordinates
+    std::vector<double> plan_trace; // flattened 3D coordinates of planner trace
+    int num_trace = 0;
 };
 
 class StateRecorder {

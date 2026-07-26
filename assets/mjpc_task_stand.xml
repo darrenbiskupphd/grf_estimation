@@ -1,14 +1,20 @@
 <mujoco>
   <custom>
-    <!-- Planner 0 = Sampling: most robust for initial bring-up -->
+    <!-- Planner 0 = Sampling, 2 = iLQR -->
     <numeric name="agent_planner"          data="0" />
-    <numeric name="agent_horizon"          data="0.5" />
-    <numeric name="agent_timestep"         data="0.015" />
-    <numeric name="sampling_spline_points" data="1" />
-    <numeric name="sampling_exploration"   data="0.05" />
+    <numeric name="agent_horizon"          data="1.0" />
+    <numeric name="agent_timestep"         data="0.005" />
+    
+    <!-- sampling planner only -->
+    <numeric name="sampling_spline_points" data="5" />
+    <numeric name="sampling_exploration"   data="0.15" />
+    <numeric name="sampling_trajectories" data="45" />
+  
+    <!-- ilqr planner only-->
     <numeric name="gradient_spline_points" data="3" />
+
     <!-- Height goal: target head-to-feet distance in metres -->
-    <numeric name="residual_Height Goal"   data="1.9 0.0 2.0" />
+    <numeric name="residual_Height Goal"   data="1.8 0.0 2.0" />
   </custom>
 
   <sensor>
@@ -19,13 +25,13 @@
     <!-- Residual 0: head-feet height error (scalar) -->
     <user name="Height"     dim="1"  user="6 100.0 0.0 100.0 0.1" />
     <!-- Residual 1: CoM-feet XY balance distance (scalar) -->
-    <user name="Balance"    dim="1"  user="6 50.0  0.0 100.0 0.1" />
+    <user name="Balance"    dim="1"  user="6 10.0  0.0 100.0 0.1" />
     <!-- Residual 2: CoM XY velocity should be zero (2D) -->
-    <user name="CoM Vel."   dim="2"  user="0 10.0  0.0 100.0" />
+    <user name="CoM Vel."   dim="2"  user="0 50.0  0.0 100.0" />
     <!-- Residual 3: joint velocity minimisation (nv-6 = 25) -->
-    <user name="Joint Vel." dim="25" user="0 0.01  0.0 0.1" />
+    <user name="Joint Vel." dim="25" user="0 0.05  0.0 0.1" />
     <!-- Residual 4: actuator effort minimisation (nu = 21) -->
-    <user name="Control"    dim="21" user="3 0.025 0.0 0.1 0.3" />
+    <user name="Control"    dim="21" user="6 0.01 0.0 0.1 0.3" />
 
     <!-- === Kinematic sensors required by Stand::ResidualFn === -->
 

@@ -219,7 +219,7 @@ bool StateRecorder::extract_physics(const mjModel* m, const mjData* d, ReplayFra
 
         // Map local contact force to global frame
         double global_force[3] = {0, 0, 0};
-        mju_mulMatVec3(global_force, c->frame, force6);
+        mju_mulMatTVec3(global_force, c->frame, force6);
 
         // Ensure force direction is pointing ON the foot BY the floor
         if (c->geom[1] == floor_geom_id_) {
