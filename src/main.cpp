@@ -86,7 +86,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     // Physics at 2400Hz, recording at 600Hz, planning every `k` steps
     double capture_rate_hz = 600.0;
     double physics_timestep = 1.0 / (capture_rate_hz * 4.0);
-    constexpr int kPlanEveryNSteps = 12;
+    constexpr int kPlanEveryNSteps = 36;
 
     // Set the high-fidelity physics timestep
     m->opt.timestep = physics_timestep;
@@ -106,7 +106,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     mjcb_sensor = &residual_sensor_cb;
 
     // Single planning thread: caller (bash) handles parallelism via multiple processes
-    mjpc::ThreadPool pool(15);
+    mjpc::ThreadPool pool(23);
 
     int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
     if (key_id >= 0) {
@@ -143,11 +143,10 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
             agent.ActiveTask()->Transition(m, d);
             agent.state.Set(m, d);
             agent.PlanIteration(&pool);
-        }
 
-        // Apply the planned action to ctrl
-        agent.ActivePlanner().ActionFromPolicy(
-            d->ctrl, agent.state.state().data(), agent.state.time(), false);
+            agent.ActivePlanner().ActionFromPolicy(
+                d->ctrl, agent.state.state().data(), agent.state.time(), false);
+        }
 
         mj_step(m, d);
         step_count++;

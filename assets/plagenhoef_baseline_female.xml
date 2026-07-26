@@ -19,7 +19,7 @@
   </asset>
 
   <default>
-    <motor ctrlrange="-1 1" ctrllimited="true"/>
+    <general ctrlrange="-1 1" ctrllimited="true" dyntype="filter" dynprm="0.05"/>
     <default class="body">
       <geom type="capsule" condim="1" friction=".7" solimp=".9 .99 .003" solref=".015 1" material="body" group="1"/>
       <default class="foot">
@@ -184,29 +184,29 @@
   </tendon>
 
   <actuator>
-    <motor name="abdomen_z"       gear="40"  joint="abdomen_z"/>
-    <motor name="abdomen_y"       gear="40"  joint="abdomen_y"/>
-    <motor name="abdomen_x"       gear="40"  joint="abdomen_x"/>
-    <motor name="hip_x_right"     gear="40"  joint="hip_x_right"/>
-    <motor name="hip_z_right"     gear="40"  joint="hip_z_right"/>
-    <motor name="hip_y_right"     gear="120" joint="hip_y_right"/>
-    <motor name="knee_right"      gear="80"  joint="knee_right"/>
-    <motor name="ankle_y_right"   gear="20"  joint="ankle_y_right"/>
-    <motor name="ankle_x_right"   gear="20"  joint="ankle_x_right"/>
-    <motor name="hip_x_left"      gear="40"  joint="hip_x_left"/>
-    <motor name="hip_z_left"      gear="40"  joint="hip_z_left"/>
-    <motor name="hip_y_left"      gear="120" joint="hip_y_left"/>
-    <motor name="knee_left"       gear="80"  joint="knee_left"/>
-    <motor name="ankle_y_left"    gear="20"  joint="ankle_y_left"/>
-    <motor name="ankle_x_left"    gear="20"  joint="ankle_x_left"/>
-    <motor name="shoulder1_right" gear="20"  joint="shoulder1_right"/>
-    <motor name="shoulder2_right" gear="20"  joint="shoulder2_right"/>
+    <general name="abdomen_z"       gear="40"  joint="abdomen_z"/>
+    <general name="abdomen_y"       gear="40"  joint="abdomen_y"/>
+    <general name="abdomen_x"       gear="40"  joint="abdomen_x"/>
+    <general name="hip_x_right"     gear="40"  joint="hip_x_right"/>
+    <general name="hip_z_right"     gear="40"  joint="hip_z_right"/>
+    <general name="hip_y_right"     gear="120" joint="hip_y_right"/>
+    <general name="knee_right"      gear="80"  joint="knee_right"/>
+    <general name="ankle_y_right"   gear="20"  joint="ankle_y_right"/>
+    <general name="ankle_x_right"   gear="20"  joint="ankle_x_right"/>
+    <general name="hip_x_left"      gear="40"  joint="hip_x_left"/>
+    <general name="hip_z_left"      gear="40"  joint="hip_z_left"/>
+    <general name="hip_y_left"      gear="120" joint="hip_y_left"/>
+    <general name="knee_left"       gear="80"  joint="knee_left"/>
+    <general name="ankle_y_left"    gear="20"  joint="ankle_y_left"/>
+    <general name="ankle_x_left"    gear="20"  joint="ankle_x_left"/>
+    <general name="shoulder1_right" gear="20"  joint="shoulder1_right"/>
+    <general name="shoulder2_right" gear="20"  joint="shoulder2_right"/>
     <!-- shoulder3_right: passive (unactuated) — joint damping provides natural arm swing -->
-    <motor name="elbow_right"     gear="40"  joint="elbow_right"/>
-    <motor name="shoulder1_left"  gear="20"  joint="shoulder1_left"/>
-    <motor name="shoulder2_left"  gear="20"  joint="shoulder2_left"/>
+    <general name="elbow_right"     gear="40"  joint="elbow_right"/>
+    <general name="shoulder1_left"  gear="20"  joint="shoulder1_left"/>
+    <general name="shoulder2_left"  gear="20"  joint="shoulder2_left"/>
     <!-- shoulder3_left: passive (unactuated) —- joint damping provides natural arm swing -->
-    <motor name="elbow_left"      gear="40"  joint="elbow_left"/>
+    <general name="elbow_left"      gear="40"  joint="elbow_left"/>
   </actuator>
 
   <keyframe>

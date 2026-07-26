@@ -8,7 +8,7 @@
     <!-- sampling planner only -->
     <numeric name="sampling_spline_points" data="5" />
     <numeric name="sampling_exploration"   data="0.15" />
-    <numeric name="sampling_trajectories" data="45" />
+    <numeric name="sampling_trajectories" data="46" />
   
     <!-- ilqr planner only-->
     <numeric name="gradient_spline_points" data="3" />
