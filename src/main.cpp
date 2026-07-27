@@ -8,7 +8,7 @@
 #include "mjpc/agent.h"
 #include "mjpc/task.h"
 #include "mjpc/threadpool.h"
-#include "mjpc/tasks/humanoid/stand/stand.h"
+#include "stand_task.hpp"
 
 struct SimConfig {
     double duration = 1.0;
@@ -93,7 +93,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     mjData* d = mj_makeData(m);
 
     // --- Stand Task Agent Setup ---
-    auto stand_task = std::make_shared<mjpc::humanoid::Stand>();
+    auto stand_task = std::make_shared<StandTask>();
     mjpc::Agent agent(m, stand_task);
     agent.Initialize(m);
     agent.Allocate();
@@ -164,10 +164,10 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
                 frame.num_trace = n_trace;
             }
 
-            if (!recorder.extract_physics(m, d, frame)) {
-                std::cout << "Early Termination: Non-foot body contact with floor at t=" << d->time << std::endl;
-                break;
-            }
+            // if (!recorder.extract_physics(m, d, frame)) {
+            //     std::cout << "Early Termination: Non-foot body contact with floor at t=" << d->time << std::endl;
+            //     break;
+            // }
 
             frame_idx++;
             next_record_time += 1.0 / capture_rate_hz;
@@ -363,6 +363,10 @@ int main(int argc, char** argv) {
 
     // Snap markers to the randomized capsule surfaces
     randomize_marker_positions(m, 7, qmc_index);
+
+    double total_mass = 0.0;
+    for (int i = 1; i < m->nbody; ++i) total_mass += m->body_mass[i]; // Skip worldbody
+    std::cout << "Total Body Mass: " << total_mass << " kg" << std::endl;
 
     // Simulate and optionally render
     std::vector<ReplayFrame> replay_buffer;

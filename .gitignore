@@ -4,3 +4,4 @@ contexts/
 build/
 pyrefly.toml
 MUJOCO_LOG.TXT
+.cache/

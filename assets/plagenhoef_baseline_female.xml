@@ -93,13 +93,10 @@
                 <!-- FOOT (Heel/Midfoot): 70% of 0.248m target length -->
                 <geom name="foot1_right" class="foot" fromto="-.045 -.01 0 .093 -.03 0" size=".025"/>
                 <geom name="foot2_right" class="foot" fromto="-.045 .01 0 .093 .03 0" size=".025"/>
-                <!-- sp2/sp3: stand task foot-sole support polygon sites (right foot) -->
-                <site name="sp2" pos="-0.045 0.0 0" type="sphere" size=".01" group="2"/>
                 <body name="toe_right" pos="0.093 0 0">
                   <joint name="mtp_right" class="mtp"/>
                   <geom name="toe1_right" class="foot" fromto="0 -.03 0 .060 -.03 0" size=".025"/>
                   <geom name="toe2_right" class="foot" fromto="0 .03 0 .060 .03 0" size=".025"/>
-                  <site name="sp3" pos="0.060 0.0 0" type="sphere" size=".01" group="2"/>
                 </body>
               </body>
             </body>
@@ -119,13 +116,10 @@
                 <!-- FOOT (Heel/Midfoot): 70% of 0.248m target length -->
                 <geom name="foot1_left" class="foot" fromto="-.045 -.01 0 .093 -.03 0" size=".025"/>
                 <geom name="foot2_left" class="foot" fromto="-.045 .01 0 .093 .03 0" size=".025"/>
-                <!-- sp0/sp1: stand task foot-sole support polygon sites (left foot) -->
-                <site name="sp0" pos="-0.045 0.0 0" type="sphere" size=".01" group="2"/>
                 <body name="toe_left" pos="0.093 0 0">
                   <joint name="mtp_left" class="mtp"/>
                   <geom name="toe1_left" class="foot" fromto="0 -.03 0 .060 -.03 0" size=".025"/>
                   <geom name="toe2_left" class="foot" fromto="0 .03 0 .060 .03 0" size=".025"/>
-                  <site name="sp1" pos="0.060 0.0 0" type="sphere" size=".01" group="2"/>
                 </body>
               </body>
             </body>
@@ -219,5 +213,5 @@
             0 0 0 0
             0 0 0 0"/>
   </keyframe>
-  <include file="mjpc_task_walk.xml"/>
+  <include file="mjpc_task_stand.xml"/>
 </mujoco>
