@@ -106,7 +106,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     mjcb_sensor = &residual_sensor_cb;
 
     // Single planning thread: caller (bash) handles parallelism via multiple processes
-    mjpc::ThreadPool pool(23);
+    mjpc::ThreadPool pool(15);
 
     int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
     if (key_id >= 0) {

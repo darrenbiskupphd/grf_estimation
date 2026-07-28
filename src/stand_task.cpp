@@ -14,7 +14,7 @@ void StandTask::ResetLocked(const mjModel* model) {
     
     // Get nominal head height and relax it by ~0.3m (approx 1-2 head lengths)
     double* head_pos = mjpc::SensorByName(model, data, "head_position");
-    target_height_ = head_pos[2] - 0.3;
+    target_height_ = head_pos[2] * .95;
     mj_deleteData(data); // free the temporary mjData
 
     // Bypass XML <user> sensors and configure costs manually
@@ -30,7 +30,7 @@ void StandTask::ResetLocked(const mjModel* model) {
     // The 5th term is now Ankle Posture (4 dimensions: x and y for both feet).
     dim_norm_residual.assign({1, 2, model->nv - 6, model->nu, 4});
     norm.assign(5, mjpc::NormType::kQuadratic);
-    weight.assign({200.0, 5.0, 10.0, 0.001, 10.0});
+    weight.assign({1000.0, 50.0, 0.5, 0.001, 15.0});
     num_norm_parameter.assign(5, 0);
     norm_parameter.clear();
 

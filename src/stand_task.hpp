@@ -26,7 +26,7 @@ public:
     // Target height calculated from the specific morphology
     double target_height_ = 1.4; 
 
-    // Cached sensor addresses for O(1) lookups in the hot loop
+    // Cached sensor addresses for direct lookups
     int adr_head_ = -1;
     int adr_comvel_ = -1;
     
