@@ -106,7 +106,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     mjcb_sensor = &residual_sensor_cb;
 
     // Single planning thread: caller (bash) handles parallelism via multiple processes
-    mjpc::ThreadPool pool(15);
+    mjpc::ThreadPool pool(23);
 
     int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
     if (key_id >= 0) {
@@ -164,10 +164,10 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
                 frame.num_trace = n_trace;
             }
 
-            // if (!recorder.extract_physics(m, d, frame)) {
-            //     std::cout << "Early Termination: Non-foot body contact with floor at t=" << d->time << std::endl;
-            //     break;
-            // }
+            if (!recorder.extract_physics(m, d, frame)) {
+                std::cout << "Early Termination: Non-foot body contact with floor at t=" << d->time << std::endl;
+                break;
+            }
 
             frame_idx++;
             next_record_time += 1.0 / capture_rate_hz;

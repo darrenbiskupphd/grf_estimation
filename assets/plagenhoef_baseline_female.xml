@@ -23,7 +23,8 @@
     <default class="body">
       <geom type="capsule" condim="1" friction=".7" solimp=".9 .99 .003" solref=".015 1" material="body" group="1"/>
       <default class="foot">
-        <geom condim="6" friction="1 0.05 0.0001"/>
+        <!-- TUNING HACK (Marked for deletion): Sets feet to contype/conaffinity 3 to collide with floor and body -->
+        <geom condim="6" friction="1 0.05 0.0001" contype="3" conaffinity="3"/>
       </default>
       <joint type="hinge" damping=".2" stiffness="1" armature=".001" limited="true" solimplimit="0 .99 .01"/>
       <default class="mtp">
@@ -46,7 +47,8 @@
   </default>
 
   <worldbody>
-    <geom name="floor" size="0 0 .05" type="plane" material="grid" condim="3"/>
+    <!-- TUNING HACK (Marked for deletion): Sets floor to contype/conaffinity 2 so only feet collide with it -->
+    <geom name="floor" size="0 0 .05" type="plane" material="grid" condim="3" contype="2" conaffinity="2"/>
     <light name="spotlight" mode="targetbodycom" target="torso" diffuse=".8 .8 .8" specular="0.3 0.3 0.3" pos="0 -6 4" cutoff="30"/>
     <light name="top" pos="0 0 2" mode="trackcom"/>
     

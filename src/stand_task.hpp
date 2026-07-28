@@ -29,12 +29,11 @@ public:
     // Cached sensor addresses for direct lookups
     int adr_head_ = -1;
     int adr_comvel_ = -1;
+    int adr_torso_zaxis_ = -1;
     
     // Cached qpos addresses for ankle posture
-    int adr_ank_x_r_ = -1;
-    int adr_ank_y_r_ = -1;
-    int adr_ank_x_l_ = -1;
-    int adr_ank_y_l_ = -1;
+    int adr_foot_right_zaxis_ = -1;
+    int adr_foot_left_zaxis_ = -1;
 
 protected:
     std::unique_ptr<mjpc::ResidualFn> ResidualLocked() const override {

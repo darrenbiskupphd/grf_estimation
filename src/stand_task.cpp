@@ -12,47 +12,41 @@ void StandTask::ResetLocked(const mjModel* model) {
     }
     mj_forward(model, data);
     
-    // Get nominal head height and relax it by ~0.3m (approx 1-2 head lengths)
+    // Get nominal head height and relax it by 5%
     double* head_pos = mjpc::SensorByName(model, data, "head_position");
     target_height_ = head_pos[2] * .95;
     mj_deleteData(data); // free the temporary mjData
 
     // Bypass XML <user> sensors and configure costs manually
-    // 0: Height (Asymmetric, Quadratic)
-    // 1: CoM Velocity (Quadratic)
-    // 2: Joint Velocity (Quadratic)
-    // 3: Control Effort (Quadratic)
-    // 4: Foot Flatness / Pitch (Quadratic)
-    
-    num_term = 5;
-    num_residual = 1 + 2 + (model->nv - 6) + model->nu + 4;
-    
-    // The 5th term is now Ankle Posture (4 dimensions: x and y for both feet).
-    dim_norm_residual.assign({1, 2, model->nv - 6, model->nu, 4});
-    norm.assign(5, mjpc::NormType::kQuadratic);
-    weight.assign({1000.0, 50.0, 0.5, 0.001, 15.0});
-    num_norm_parameter.assign(5, 0);
-    norm_parameter.clear();
+    // 0: Height (Asymmetric)
+    // 1: CoM Velocity
+    // 2: Upright Posture (Torso Z-axis)
+    // 3: Control Effort
+    // 4: Foot Flatness / Pitch
 
-    // Cache sensor addresses to avoid O(N) string lookups in the hot loop
+    num_term = 5;
+    num_residual = 1 + 2 + 1 + model->nu + 2;
+    
+    dim_norm_residual.assign({1, 2, 1, model->nu, 2});
+    norm.assign(5, mjpc::NormType::kSmoothAbsLoss); // Pseudo-Huber loss
+    weight.assign({2500.0, 1000.0, 500.0, 0.0005, 100.0});
+    num_norm_parameter.assign(5, 1);                // This norm requires 1 parameter
+    norm_parameter.assign(5, 0.1);                  // The 'p' parameter (quadratic bowl width)
+
     int id_head = mj_name2id(model, mjOBJ_SENSOR, "head_position");
     adr_head_ = id_head >= 0 ? model->sensor_adr[id_head] : -1;
     
     int id_comvel = mj_name2id(model, mjOBJ_SENSOR, "torso_subtreelinvel");
     adr_comvel_ = id_comvel >= 0 ? model->sensor_adr[id_comvel] : -1;
     
-    // Cache ankle joint addresses for posture cost
-    int j_x_r = mj_name2id(model, mjOBJ_JOINT, "ankle_x_right");
-    adr_ank_x_r_ = j_x_r >= 0 ? model->jnt_qposadr[j_x_r] : -1;
+    int id_zaxis = mj_name2id(model, mjOBJ_SENSOR, "torso_zaxis");
+    adr_torso_zaxis_ = id_zaxis >= 0 ? model->sensor_adr[id_zaxis] : -1;
     
-    int j_y_r = mj_name2id(model, mjOBJ_JOINT, "ankle_y_right");
-    adr_ank_y_r_ = j_y_r >= 0 ? model->jnt_qposadr[j_y_r] : -1;
+    int id_foot_r = mj_name2id(model, mjOBJ_SENSOR, "foot_right_zaxis");
+    adr_foot_right_zaxis_ = id_foot_r >= 0 ? model->sensor_adr[id_foot_r] : -1;
     
-    int j_x_l = mj_name2id(model, mjOBJ_JOINT, "ankle_x_left");
-    adr_ank_x_l_ = j_x_l >= 0 ? model->jnt_qposadr[j_x_l] : -1;
-    
-    int j_y_l = mj_name2id(model, mjOBJ_JOINT, "ankle_y_left");
-    adr_ank_y_l_ = j_y_l >= 0 ? model->jnt_qposadr[j_y_l] : -1;
+    int id_foot_l = mj_name2id(model, mjOBJ_SENSOR, "foot_left_zaxis");
+    adr_foot_left_zaxis_ = id_foot_l >= 0 ? model->sensor_adr[id_foot_l] : -1;
 }
 
 void StandTask::ResidualFn::Residual(const mjModel* model, const mjData* data, double* residual) const {
@@ -72,18 +66,19 @@ void StandTask::ResidualFn::Residual(const mjModel* model, const mjData* data, d
     residual[counter++] = com_vel[0];
     residual[counter++] = com_vel[1];
 
-    // ----- 2: Joint Velocity -----
-    mju_copy(residual + counter, data->qvel + 6, model->nv - 6);
-    counter += model->nv - 6;
+    // ----- 2: Upright Posture -----
+    double* zaxis = data->sensordata + task_->adr_torso_zaxis_;
+    residual[counter++] = 1.0 - zaxis[2];
 
     // ----- 3: Control Effort -----
     mju_copy(residual + counter, data->ctrl, model->nu);
     counter += model->nu;
 
-    // ----- 4: Ankle Posture -----
-    // Penalize deviation from neutral joint angles (0.0) to prevent foot rolling
-    residual[counter++] = task_->adr_ank_x_r_ >= 0 ? data->qpos[task_->adr_ank_x_r_] : 0.0; // Right roll
-    residual[counter++] = task_->adr_ank_y_r_ >= 0 ? data->qpos[task_->adr_ank_y_r_] : 0.0; // Right pitch
-    residual[counter++] = task_->adr_ank_x_l_ >= 0 ? data->qpos[task_->adr_ank_x_l_] : 0.0; // Left roll
-    residual[counter++] = task_->adr_ank_y_l_ >= 0 ? data->qpos[task_->adr_ank_y_l_] : 0.0; // Left pitch
+    // ----- 4: Foot Flatness (Global Pitch/Roll) -----
+    // Penalize deviation of foot Z-axis from world Z-axis (0, 0, 1)
+    double* foot_r_z = data->sensordata + task_->adr_foot_right_zaxis_;
+    residual[counter++] = 1.0 - foot_r_z[2];
+    
+    double* foot_l_z = data->sensordata + task_->adr_foot_left_zaxis_;
+    residual[counter++] = 1.0 - foot_l_z[2];
 }

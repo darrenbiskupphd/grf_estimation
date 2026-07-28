@@ -2,13 +2,13 @@
   <custom>
     <!-- Planner 0 = Sampling, 2 = iLQR -->
     <numeric name="agent_planner"          data="0" />
-    <numeric name="agent_horizon"          data="1.0" />
+    <numeric name="agent_horizon"          data="1.5" />
     <numeric name="agent_timestep"         data="0.005" />
     
     <!-- sampling planner only -->
-    <numeric name="sampling_spline_points" data="5" />
+    <numeric name="sampling_spline_points" data="3" />
     <numeric name="sampling_exploration"   data="0.2" />
-    <numeric name="sampling_trajectories" data="45" />
+    <numeric name="sampling_trajectories" data="46" />
   
     <!-- ilqr planner only-->
     <numeric name="gradient_spline_points" data="3" />
@@ -34,6 +34,8 @@
     <framepos      name="torso_position"  objtype="body"  objname="torso"/>
     <framezaxis    name="torso_zaxis"     objtype="xbody" objname="torso"/>
     <framexaxis    name="torso_forward"   objtype="xbody" objname="torso"/>
+    <framezaxis    name="foot_right_zaxis" objtype="xbody" objname="foot_right"/>
+    <framezaxis    name="foot_left_zaxis"  objtype="xbody" objname="foot_left"/>
     <subtreelinvel name="foot_right_vel"  body="foot_right"/>
     <subtreelinvel name="foot_left_vel"   body="foot_left"/>
     <framepos      name="trace0"          objtype="body"  objname="torso"/>
