@@ -49,7 +49,7 @@ set(MJPC_BUILD_GRPC_SERVICE OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(mujoco_mpc)
 
-add_executable(data_factory src/main.cpp src/morphology_randomizer.cpp src/stand_task.cpp)
+add_executable(data_factory src/main.cpp src/morphology_randomizer.cpp)
 
 target_link_libraries(data_factory PRIVATE mujoco::mujoco glfw libmjpc)
 

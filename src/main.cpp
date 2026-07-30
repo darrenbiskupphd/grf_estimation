@@ -8,7 +8,7 @@
 #include "mjpc/agent.h"
 #include "mjpc/task.h"
 #include "mjpc/threadpool.h"
-#include "stand_task.hpp"
+#include "mjpc/tasks/humanoid/walk/walk.h"
 
 struct SimConfig {
     double duration = 1.0;
@@ -92,9 +92,26 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     m->opt.timestep = physics_timestep;
     mjData* d = mj_makeData(m);
 
-    // --- Stand Task Agent Setup ---
-    auto stand_task = std::make_shared<StandTask>();
-    mjpc::Agent agent(m, stand_task);
+    // Get nominal torso height and relax it by 5%
+    mj_forward(m, d);
+    int id_torso_pos = mj_name2id(m, mjOBJ_SENSOR, "torso_position");
+    double torso_z = d->sensordata[m->sensor_adr[id_torso_pos] + 2];
+    int id_num_torso = mj_name2id(m, mjOBJ_NUMERIC, "residual_Torso");
+    m->numeric_data[m->numeric_adr[id_num_torso]] = torso_z;
+
+    // Randomize speed between 0.3 and 1.5 m/s (pseudo-random based on buffer address or simple static counter, but we don't have qmc_index here easily. Wait, let's just use a fixed speed or random)
+    // Actually, we can just use a simple pseudo-random value based on the model's mass or just rand() since we don't have qmc_index passed to run_simulation.
+    int id_num_speed = mj_name2id(m, mjOBJ_NUMERIC, "residual_Speed");
+    if (id_num_speed >= 0) {
+        double speed = 0.3 + .5 * (static_cast<double>(rand() % 100) / 100.0);
+        speed = 0.2;
+        m->numeric_data[m->numeric_adr[id_num_speed]] = speed;
+        std::cout << "Episode Target Speed: " << speed << " m/s" << std::endl;
+    }
+
+    // --- Walk Task Agent Setup ---
+    auto walk_task = std::make_shared<mjpc::humanoid::Walk>();
+    mjpc::Agent agent(m, walk_task);
     agent.Initialize(m);
     agent.Allocate();
     agent.Reset();
@@ -108,17 +125,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     // Single planning thread: caller (bash) handles parallelism via multiple processes
     mjpc::ThreadPool pool(23);
 
-    int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
-    if (key_id >= 0) {
-        mju_copy(d->qpos, m->key_qpos + key_id * m->nq, m->nq);
-        mju_copy(d->qvel, m->key_qvel + key_id * m->nv, m->nv);
-        mju_copy(d->act,  m->key_act  + key_id * m->na, m->na);
-    } else {
-        std::cerr << "Warning: Keyframe 'drop_impact' not found." << std::endl;
-    }
-
     // Seed the planner with the initial state
-    mj_forward(m, d);
     agent.ActiveTask()->Transition(m, d);
     agent.state.Set(m, d);
     agent.PlanIteration(&pool);
