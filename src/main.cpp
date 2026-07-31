@@ -92,6 +92,10 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     m->opt.timestep = physics_timestep;
     mjData* d = mj_makeData(m);
 
+    // Reset to the drop_impact keyframe
+    // int key_id = mj_name2id(m, mjOBJ_KEY, "drop_impact");
+    // mj_resetDataKeyframe(m, d, key_id);
+
     // Get nominal torso height and relax it by 5%
     mj_forward(m, d);
     int id_torso_pos = mj_name2id(m, mjOBJ_SENSOR, "torso_position");
@@ -104,7 +108,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     int id_num_speed = mj_name2id(m, mjOBJ_NUMERIC, "residual_Speed");
     if (id_num_speed >= 0) {
         double speed = 0.3 + .5 * (static_cast<double>(rand() % 100) / 100.0);
-        speed = 0.2;
+        speed = 0.7;
         m->numeric_data[m->numeric_adr[id_num_speed]] = speed;
         std::cout << "Episode Target Speed: " << speed << " m/s" << std::endl;
     }
@@ -123,7 +127,7 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     mjcb_sensor = &residual_sensor_cb;
 
     // Single planning thread: caller (bash) handles parallelism via multiple processes
-    mjpc::ThreadPool pool(23);
+    mjpc::ThreadPool pool(22);
 
     // Seed the planner with the initial state
     agent.ActiveTask()->Transition(m, d);
@@ -319,6 +323,7 @@ void render_replay(mjModel* m, const std::vector<ReplayFrame>& replay_buffer) {
 }
 
 int main(int argc, char** argv) {
+    srand(std::chrono::system_clock::now().time_since_epoch().count());
     SimConfig config;
 
     std::string model_path = "assets/winter_baseline_male.xml";

@@ -128,7 +128,7 @@
       
       <body name="upper_arm_right" pos="0 -.17 .06">
         <joint name="shoulder1_right" axis="1 0 0" range="-90 90" />
-        <joint name="shoulder2_right" axis="0 0 1" range="-85 60" />
+        <joint name="shoulder2_right" axis="0 0 1" range="-20 135" />
         <joint name="shoulder3_right" axis="0 1 0" range="-90 90" />
         
         <geom name="upper_arm_right" fromto="0 0 0  0 -0.325 0" size=".042" />
@@ -144,7 +144,7 @@
       
       <body name="upper_arm_left" pos="0 .17 .06">
         <joint name="shoulder1_left" axis="-1 0 0" range="-90 90" />
-        <joint name="shoulder2_left" axis="0 0 -1" range="-85 60" />
+        <joint name="shoulder2_left" axis="0 0 -1" range="-20 135" />
         <joint name="shoulder3_left" axis="0 -1 0" range="-90 90" />
         <geom name="upper_arm_left" fromto="0 0 0  0 0.325 0" size=".042" />
         <body name="lower_arm_left" pos="0 0.325 0">
@@ -200,10 +200,8 @@
     <general name="elbow_left" gear="140" joint="elbow_left" />
   </actuator>
 
-
-
   <keyframe>
-    <key name="drop_impact" qpos="0 0 1.60             0.988015 0 0.154359 0             0 0.4 0             -0.25 -0.5 -2.5 -2.65 -0.8 0.56 0             -0.25 -0.5 -2.5 -2.65 -0.8 0.56 0             0 0 0 0             0 0 0 0" />
+    <key name="drop_impact" qpos="0 0 1.35             0.988015 0 0.154359 0             0 0.4 0             -0.25 -0.5 -2.5 -2.65 -0.8 0.56 0             -0.25 -0.5 -2.5 -2.65 -0.8 0.56 0             0 0 0 0             0 0 0 0" />
   </keyframe>
   <include file="mjpc_task_walk.xml" />
 </mujoco>
