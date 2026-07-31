@@ -104,11 +104,10 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     m->numeric_data[m->numeric_adr[id_num_torso]] = torso_z;
 
     // Randomize speed between 0.3 and 1.5 m/s (pseudo-random based on buffer address or simple static counter, but we don't have qmc_index here easily. Wait, let's just use a fixed speed or random)
-    // Actually, we can just use a simple pseudo-random value based on the model's mass or just rand() since we don't have qmc_index passed to run_simulation.
     int id_num_speed = mj_name2id(m, mjOBJ_NUMERIC, "residual_Speed");
     if (id_num_speed >= 0) {
-        double speed = 0.3 + .5 * (static_cast<double>(rand() % 100) / 100.0);
-        speed = 0.7;
+        double speed = 0.5 + 2.0 * (static_cast<double>(rand() % 100) / 100.0);
+        speed = 1.5;
         m->numeric_data[m->numeric_adr[id_num_speed]] = speed;
         std::cout << "Episode Target Speed: " << speed << " m/s" << std::endl;
     }
@@ -189,8 +188,8 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     replay_buffer.resize(frame_idx);
 
     if (!config.output_path.empty()) {
+        std::cout << "Saving data to " << config.output_path << std::endl;
         recorder.write_csv(config.output_path, replay_buffer);
-        std::cout << "Data saved to " << config.output_path << std::endl;
     }
 
     // Cleanup

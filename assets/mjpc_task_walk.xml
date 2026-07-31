@@ -2,7 +2,7 @@
   <custom>
     <numeric name="agent_planner" data="2" />
     <numeric name="agent_horizon" data=".75" />
-    <numeric name="agent_timestep" data="0.010" />
+    <numeric name="agent_timestep" data="0.005" />
     <numeric name="sampling_spline_points" data="3" />
     <numeric name="sampling_exploration" data="0.2" />
     <numeric name="sampling_trajectories" data="46" />
@@ -13,14 +13,14 @@
   </custom>
 
   <sensor>
-    <user name="Height" dim="1" user="7 5.0 0 25.0 0.1 4.0" />
-    <user name="Pelvis/Feet" dim="1" user="8 5.0 0.0 10.0 0.05" />
-    <user name="Balance" dim="2" user="1 15.0 0.0 25.0 0.02 4.0" />
-    <user name="Upright" dim="8" user="2 12.5 0.0 25.0 0.01" />
-    <user name="Posture" dim="25" user="0 0.0001 0 1.0" />
-    <user name="Walk" dim="1" user="7 25 0.0 25.0 0.5 3.0" />
-    <user name="Velocity" dim="2" user="7 2.0 0 25.0 0.2 4.0" />
-    <user name="Control" dim="21" user="6 2.0 0 1.0 0.3" />
+    <user name="Height" dim="1" user="7 2.0 0 25.0 0.1 4.0" />
+    <user name="Pelvis/Feet" dim="1" user="8 25.0 0.0 10.0 0.05" />
+    <user name="Balance" dim="2" user="1 1.5 0.0 25.0 0.02 4.0" />
+    <user name="Upright" dim="8" user="2 2.0 0.0 25.0 0.01" />
+    <user name="Posture" dim="25" user="0 0.025 0 1.0" />
+    <user name="Walk" dim="1" user="7 20 0.0 25.0 0.5 3.0" />
+    <user name="Velocity" dim="2" user="7 1.0 0 25.0 0.2 4.0" />
+    <user name="Control" dim="21" user="6 .6 0 1.0 0.3" />
 
     <framepos name="torso_position" objtype="body" objname="torso"/>
     <subtreecom name="torso_subcom" body="torso"/>
