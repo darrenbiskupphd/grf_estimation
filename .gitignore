@@ -5,3 +5,4 @@ build/
 pyrefly.toml
 MUJOCO_LOG.TXT
 .cache/
+PROJECT_OVERVIEW.md

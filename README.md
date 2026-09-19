@@ -1,85 +1,91 @@
-This repository is dedicated to the research and implementation of Ground Reaction Force and Center of Pressure estimation algorithms using MuJoCo physics simulation.
+# Ground Reaction Force and Center of Pressure Estimation
 
-## Environment Modifications
+An early research project exploring estimation of ground reaction force (GRF) and center of pressure (CoP) from motion-capture marker trajectories. The current repository implements a synthetic-data prototype using MuJoCo and MuJoCo MPC (MJPC).
 
-This repository utilizes a modified version of the standard Gymnasium MuJoCo `humanoid.xml`.
+The C++ `data_factory` executable randomizes a humanoid model, attaches procedural markers, runs an MJPC walking task, and exports per-foot forces, contact-position estimates, and marker coordinates. It can also replay an episode with force arrows and planner traces. A trained estimator, training pipeline, and validated real-world results are future work; reliable walking across morphologies is still under development.
 
-```xml
-<default class="foot">
-    <!-- condim="6" enables torsional/rolling friction computation. 
-            Friction array: sliding, torsional, rolling -->
-    <geom size=".027" condim="6" friction="1.0 0.05 0.0001"/>
-    <default class="foot1">
-        <geom fromto="-.07 -.01 0 .14 -.03 0"/>
-    </default>
-    <default class="foot2">
-        <geom fromto="-.07 .01 0 .14  .03 0"/>
-    </default>
-    </default>
+## Build
+
+The instructions below target Linux. You need a C/C++ toolchain with C++17 support, CMake 3.20 or newer, Git, and the graphics development dependencies used by GLFW and MuJoCo. The first configuration downloads dependencies and requires network access.
+
+For Debian/Ubuntu, typical prerequisites are:
+
+```bash
+sudo apt install build-essential cmake git pkg-config libgl1-mesa-dev zlib1g-dev xorg-dev libwayland-dev libxkbcommon-dev
 ```
 
-### Physical Rationale
-1. **Analytic Collision Geometry:** Replacing the rigid spheres (or boxes) with capsules prevents point-contact simulation. This yields continuous, differentiable contact normals required for stable spatial wrench extraction.
-2. **6D Contact Mechanics:** The foot capsules are initialized with `condim="6"`. This directs the MuJoCo solver to compute the full 6-DOF contact wrench at the geometries, capturing the 3D linear friction components as well as the torsional (vertical Z-torque) and rolling friction components. 
-3. **Biomechanical Footprint:** The heel and toe capsules approximate the spatial bounding box of a human foot, allowing for proper internal lever arms when resolving the individual contact wrenches into a singular resultant CoP per foot.
+GLFW builds both X11 and Wayland backends by default on Linux; see its [platform dependency instructions](https://www.glfw.org/docs/3.4/compile.html#compile_deps_wayland). Graphics libraries are build dependencies even when running an episode without a viewer.
 
-## Anthropometric Baseline Calibration & The Geometric Inertia Heuristic
+```bash
+git clone https://github.com/darrenbiskupphd/grf_estimation.git
+cd grf_estimation
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target data_factory --parallel 4
+```
 
-### The Problem
-To train a generalized Ground Reaction Force (GRF) regressor, the simulation pipeline must generate thousands of randomized human morphologies. We want to randomize over individual segment geometries, which will produce varying, uncorrelated inertia characteristics so that the trained regressor generalizes to diverse human physiques and limb proportions. 
+[CMakeLists.txt](CMakeLists.txt) requests MuJoCo **3.2.6**, GLFW **3.4**, and MJPC **`main`**. MJPC is not pinned, so a fresh checkout can resolve a different dependency revision. The project currently has no automated clean-build verification across platforms.
 
-### The Approach
-We use MuJoCo's `inertiafromgeom="true"` compiler flag to let the simulator natively compute segment inertia from a uniform density. By assuming a heuristic density roughly equivalent to water ($\rho = 1000 \text{ kg/m}^3$), we establish a direct mathematical link between a segment's spatial volume and its inertial tensor.
+## Generate an episode
 
-We independently mutate the geometry (length $L_i$ and radius $r_i$) of individual segments. This forces the neural network to learn the implicit mapping from a localized marker cloud volume to that specific limb's localized inertial contribution.
+Run from the repository root so relative asset paths resolve. Create the output directory first; the program does not create it.
 
-### Establishing the Nominal Baseline
-To establish a mathematically grounded starting point before applying independent randomizations, we anchor our baseline humanoid to a nominal 50th percentile male ($M = 75 \text{ kg}$, $H = 1.75 \text{ m}$) using foundational biomechanical data (Winter, 2009).
+```bash
+mkdir -p data
+./build/data_factory --duration 1 --speed 0.8 --qmc-index 1 --output data/episode_001.csv
+```
 
-For a given segment $i$, we extract its nominal mass $m_i$ and length $L_i$ using Winter's anthropometric scaling fractions:
+Use the other baseline and optionally replay the completed simulation:
 
-$$m_i = c_{mass, i} M$$
-$$L_i = c_{length, i} H$$
+```bash
+./build/data_factory --model assets/plagenhoef_baseline_female.xml --duration 1 --speed 0.8 --qmc-index 2 --output data/episode_002.csv --render
+```
 
-The exact volume $V$ of a MuJoCo capsule is the sum of a cylinder and a spherical cap ($V = \pi r^2 L + \frac{4}{3} \pi r^3$). Isolating the capsule radius ($r_i$), which maps directly to the `size` attribute in the MJCF XML:
+`--render` requires a working graphical display. Replay runs after generation and closes at the end of the episode; Escape closes it early. Drag with the left mouse button to rotate, the right button to pan, and use the wheel to zoom.
 
-### The Domain Randomization Strategy
-During data generation, the simulation script applies independent uniform noise to the nominal $L_i$ and $r_i$ values derived above. MuJoCo's compiler then automatically resolves the updated localized mass and inertia tensor for that specific mutated segment on the fly.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--model <path>` | `assets/winter_baseline_male.xml` | MJCF model compatible with the humanoid walking task and recorder. |
+| `--duration <seconds>` | `1.0` | Requested simulation time; an episode can terminate early. |
+| `--speed <m/s>` | Random | Nonnegative target speed. A negative value selects a random target in `[0.5, 2.5)` m/s. |
+| `--qmc-index <integer>` | `1` | Halton-sequence index controlling geometry and marker placement. Use a positive integer. |
+| `--output <path>` | No file | CSV destination; an existing file at this path is overwritten. |
+| `--render` | Off | Replay the generated episode. |
 
+Geometry randomization is always enabled; index `1` is not the unmodified baseline. An explicit speed and QMC index control these inputs but do not provide a complete reproducibility guarantee. There is no seed option or batch-generation command. Numeric arguments have only limited validation.
 
-Here is the explicit mapping of Winter's 50th percentile male (75kg, 1.75m) and Plagenhoef's standard female (61kg, 1.63m) to the XML variables. These tables directly reflect the mean proportional data reported in their respective textbooks.
+The simulator targets 600 Hz recording with 2400 Hz physics. Planning is synchronous, so generating an episode can take substantially longer than its simulated duration. Each process currently creates 22 planner worker threads; account for this before launching several processes.
 
-### Winter (1990) - Standard Male (75 kg, 1.75 m)
-*Note: Winter (1990) reports deterministic scaling proportions (means) and does not provide segment-specific standard deviations for these scaling factors.*
+## Output and current limitations
 
-| Anatomical Segment | Mass Fraction | Target Mass (m) | Length Fraction | Target Length (L) | XML Target name | Imputed Size (r) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Head | 0.081 M | 6.07 kg | - | - | `head` | 0.113 m |
-| Trunk (Total) | 0.497 M | 37.27 kg | 0.300 H | 0.525 m | - | - |
-| Trunk (Per Capsule) | - | 9.32 kg | - | 0.140 m | `torso`, `waist_upper`, `waist_lower`, `butt`| 0.104 m |
-| Thigh | 0.100 M | 7.50 kg | 0.245 H | 0.429 m | `thigh_left`, `thigh_right` | 0.068 m |
-| Shin | 0.046 M | 3.49 kg | 0.246 H | 0.430 m | `shin_left`, `shin_right` | 0.048 m |
-| Upper Arm | 0.028 M | 2.10 kg | 0.186 H | 0.325 m | `upper_arm_left`, `upper_arm_right` | 0.042 m |
-| Forearm | 0.016 M | 1.20 kg | 0.146 H | 0.255 m | `lower_arm_left`, `lower_arm_right` | 0.036 m |
-| Foot (Total) | 0.0145 M | 1.09 kg | 0.152 H | 0.266 m | `foot_*`, `toe_*` | 0.027 m |
+Each CSV contains:
 
-### Plagenhoef (1983) - Standard Female (61 kg, 1.63 m)
-*Note: Plagenhoef (1983) similarly reports fixed anatomical proportions and does not provide standard deviations for segment lengths.*
+| Columns | Contents / units |
+| --- | --- |
+| `time` | Simulation timestamp in seconds. |
+| `grf_left_x/y/z`, `grf_right_x/y/z` | Summed force exerted by the floor on each foot, in world axes, in newtons. |
+| `cop_left_x/y/z`, `cop_right_x/y/z` | Vertical-force-weighted contact positions, in world axes, in metres. |
+| `marker_<site_id>_x/y/z` | Procedural marker positions, in world axes, in metres. |
 
-| Anatomical Segment | Mass Fraction | Target Mass (m) | Length Fraction | Target Length (L) | XML Target name | Imputed Size (r) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Head | 0.071 M | 4.33 kg | - | - | `head` | 0.101 m |
-| Trunk (Total) | 0.461 M | 28.12 kg | 0.300 H | 0.489 m | - | - |
-| Trunk (Per Capsule) | - | 7.03 kg | - | 0.122 m | `torso`, `waist_upper`, `waist_lower`, `butt`| 0.096 m |
-| Thigh | 0.117 M | 7.14 kg | 0.245 H | 0.399 m | `thigh_left`, `thigh_right` | 0.069 m |
-| Shin | 0.046 M | 2.81 kg | 0.246 H | 0.401 m | `shin_left`, `shin_right` | 0.047 m |
-| Upper Arm | 0.027 M | 1.65 kg | 0.186 H | 0.303 m | `upper_arm_left`, `upper_arm_right` | 0.042 m |
-| Forearm | 0.016 M | 0.98 kg | 0.146 H | 0.238 m | `lower_arm_left`, `lower_arm_right` | 0.036 m |
-| Foot (Total) | 0.0140 M | 0.85 kg | 0.152 H | 0.248 m | `foot_*`, `toe_*` | 0.026 m |
+The supplied models produce 112 markers and 349 columns. Use the recorded `time` column when reading an episode. Model state, contact moments, marker-to-body mappings, and episode configuration metadata are not exported.
 
-Male Spinal Kinematic Offsets (pos Z-translation)
+The current `cop_*` values are a contact-position approximation: they do not incorporate contact torques or project onto a specified force-plate plane. An unloaded foot has zero CoP values and no separate validity flag. Episodes stop when the recorder detects floor contact by a body other than a foot or toe, retaining the preceding frames. This check does not establish that a gait is biologically realistic or that all unwanted contacts are detected.
 
-- Head: $0.207$ m
-- Lumbar (waist_lower): $-0.283$ m
-- Pelvis (pelvis): $-0.180$ m
-- Hip Sockets (thigh): $-0.044$ m
+## Inspect a baseline model
+
+The optional Python helper prints body masses, an inertia comparison, and height/centre-of-mass diagnostics, then opens MuJoCo's viewer:
+
+```bash
+python3 -m venv /tmp/grf-inspection-venv
+/tmp/grf-inspection-venv/bin/python -m pip install 'mujoco==3.2.6' numpy
+/tmp/grf-inspection-venv/bin/python python/xml_visualizer.py assets/winter_baseline_male.xml
+```
+
+This displays the unrandomized XML. The inertia comparison uses female Plagenhoef coefficients for either input model and prints differences without pass/fail criteria; treat it as an exploratory diagnostic.
+
+## Repository layout
+
+- [`assets/`](assets/): male and female baseline MJCF models and shared walking-task settings.
+- [`src/main.cpp`](src/main.cpp): command-line entry point, planning, simulation, and replay.
+- [`src/morphology_randomizer.cpp`](src/morphology_randomizer.cpp): geometry/marker sampling, force extraction, and CSV recording.
+- [`python/xml_visualizer.py`](python/xml_visualizer.py): baseline inspection helper.
+- `build/` and `data/`: local build products and generated data, ignored by Git.

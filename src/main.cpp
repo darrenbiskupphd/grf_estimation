@@ -12,6 +12,7 @@
 
 struct SimConfig {
     double duration = 1.0;
+    double speed = -1.0; // negative → random
     bool render = false;
     std::string output_path = "";
 };
@@ -103,11 +104,10 @@ void run_simulation(mjModel* m, std::vector<ReplayFrame>& replay_buffer, const S
     int id_num_torso = mj_name2id(m, mjOBJ_NUMERIC, "residual_Torso");
     m->numeric_data[m->numeric_adr[id_num_torso]] = torso_z;
 
-    // Randomize speed between 0.3 and 1.5 m/s (pseudo-random based on buffer address or simple static counter, but we don't have qmc_index here easily. Wait, let's just use a fixed speed or random)
     int id_num_speed = mj_name2id(m, mjOBJ_NUMERIC, "residual_Speed");
     if (id_num_speed >= 0) {
-        double speed = 0.5 + 2.0 * (static_cast<double>(rand() % 100) / 100.0);
-        speed = 1.5;
+        double speed = config.speed;
+        if (speed < 0.0) speed = 0.5 + 2.0 * (static_cast<double>(rand() % 1000) / 1000.0);
         m->numeric_data[m->numeric_adr[id_num_speed]] = speed;
         std::cout << "Episode Target Speed: " << speed << " m/s" << std::endl;
     }
@@ -338,11 +338,13 @@ int main(int argc, char** argv) {
             config.output_path = argv[++i];
         } else if (arg == "--model" && i + 1 < argc) {
             model_path = argv[++i];
+        } else if (arg == "--speed" && i + 1 < argc) {
+            config.speed = std::stod(argv[++i]);
         } else if (arg == "--qmc-index" && i + 1 < argc) {
             qmc_index = std::stoi(argv[++i]);
         } else {
             std::cerr << "Unknown or malformed argument: " << arg << std::endl;
-            std::cerr << "Usage: " << argv[0] << " [--duration <sec>] [--render] [--output <path>] [--model <path>] [--qmc-index <int>]" << std::endl;
+            std::cerr << "Usage: " << argv[0] << " [--duration <sec>] [--speed <m/s>] [--render] [--output <path>] [--model <path>] [--qmc-index <int>]" << std::endl;
             return 1;
         }
     }
@@ -363,7 +365,7 @@ int main(int argc, char** argv) {
     // Add QMC procedural markers before compilation
     add_qmc_markers_to_spec(spec, 7);
 
-    // Compile into final rigorous mjModel
+    // Compile into mjModel
     mjModel* m = mj_compile(spec, nullptr);
     mj_deleteSpec(spec);
 

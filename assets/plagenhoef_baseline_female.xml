@@ -39,7 +39,7 @@
       <default class="knee"><joint pos="0 0 0" axis="0 -1 0" range="-160 2" /></default>
       <default class="ankle">
         <joint range="-50 50" />
-        <default class="ankle_y"><joint pos="0 0 0" axis="0 1 0" stiffness="6" /></default>
+        <default class="ankle_y"><joint pos="0 0 0" axis="0 1 0" stiffness="6" springref="0.2" /></default>
         <default class="ankle_x"><joint pos="0 0 0" stiffness="3" /></default>
       </default>
     </default>
@@ -176,27 +176,27 @@
   </tendon>
 
   <actuator>
-    <general name="abdomen_z" gear="140" joint="abdomen_z" />
-    <general name="abdomen_y" gear="140" joint="abdomen_y" />
-    <general name="abdomen_x" gear="300" joint="abdomen_x" />
-    <general name="hip_x_right" gear="140" joint="hip_x_right" />
-    <general name="hip_z_right" gear="140" joint="hip_z_right" />
-    <general name="hip_y_right" gear="420" joint="hip_y_right" />
-    <general name="knee_right" gear="280" joint="knee_right" />
-    <general name="ankle_y_right" gear="70" joint="ankle_y_right" />
-    <general name="ankle_x_right" gear="70" joint="ankle_x_right" />
-    <general name="hip_x_left" gear="140" joint="hip_x_left" />
-    <general name="hip_z_left" gear="140" joint="hip_z_left" />
-    <general name="hip_y_left" gear="420" joint="hip_y_left" />
-    <general name="knee_left" gear="280" joint="knee_left" />
-    <general name="ankle_y_left" gear="70" joint="ankle_y_left" />
-    <general name="ankle_x_left" gear="70" joint="ankle_x_left" />
-    <general name="shoulder1_right" gear="20" joint="shoulder1_right" />
-    <general name="shoulder2_right" gear="20" joint="shoulder2_right" />
-    <general name="elbow_right" gear="40" joint="elbow_right" />
-    <general name="shoulder1_left" gear="20" joint="shoulder1_left" />
-    <general name="shoulder2_left" gear="20" joint="shoulder2_left" />
-    <general name="elbow_left" gear="40" joint="elbow_left" />
+    <general name="abdomen_z" gear="100" joint="abdomen_z" />
+    <general name="abdomen_y" gear="100" joint="abdomen_y" />
+    <general name="abdomen_x" gear="170" joint="abdomen_x" />
+    <general name="hip_x_right" gear="100" joint="hip_x_right" />
+    <general name="hip_z_right" gear="70" joint="hip_z_right" />
+    <general name="hip_y_right" gear="200" joint="hip_y_right" />
+    <general name="knee_right" gear="170" joint="knee_right" />
+    <general name="ankle_y_right" gear="110" joint="ankle_y_right" />
+    <general name="ankle_x_right" gear="40" joint="ankle_x_right" />
+    <general name="hip_x_left" gear="100" joint="hip_x_left" />
+    <general name="hip_z_left" gear="70" joint="hip_z_left" />
+    <general name="hip_y_left" gear="200" joint="hip_y_left" />
+    <general name="knee_left" gear="170" joint="knee_left" />
+    <general name="ankle_y_left" gear="110" joint="ankle_y_left" />
+    <general name="ankle_x_left" gear="40" joint="ankle_x_left" />
+    <general name="shoulder1_right" gear="50" joint="shoulder1_right" />
+    <general name="shoulder2_right" gear="50" joint="shoulder2_right" />
+    <general name="elbow_right" gear="45" joint="elbow_right" />
+    <general name="shoulder1_left" gear="50" joint="shoulder1_left" />
+    <general name="shoulder2_left" gear="50" joint="shoulder2_left" />
+    <general name="elbow_left" gear="45" joint="elbow_left" />
   </actuator>
 
   <keyframe>
