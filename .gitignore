@@ -6,3 +6,4 @@ pyrefly.toml
 MUJOCO_LOG.TXT
 .cache/
 PROJECT_OVERVIEW.md
+IMPLEMENTATION_PLAN.md
