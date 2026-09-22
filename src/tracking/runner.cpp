@@ -40,8 +40,34 @@ Clip find_clip(const mjModel *model, const std::string &motion) {
     }
   }
   if (clip.count < 2)
-    throw std::runtime_error("Reference clip not found");
+    throw std::runtime_error("Reference clip not found: " + motion);
   return clip;
+}
+
+bool is_foot_only_motion(const std::string &motion) {
+  return std::any_of(kFootOnlyMotions.begin(), kFootOnlyMotions.end(),
+                     [&motion](const char *name) { return motion == name; });
+}
+
+std::string foot_only_motion_names() {
+  std::string names;
+  for (const char *motion : kFootOnlyMotions) {
+    if (!names.empty())
+      names += "|";
+    names += motion;
+  }
+  return names;
+}
+
+ResolvedDuration resolve_duration(const Clip &clip, double requested_duration) {
+  if (clip.count < 2 || !std::isfinite(requested_duration) ||
+      requested_duration < 0)
+    throw std::runtime_error("Duration must be finite and nonnegative");
+  const double full_duration = clip.duration();
+  const double requested =
+      requested_duration == 0 ? full_duration : requested_duration;
+  return {requested, std::min(requested, full_duration),
+          requested > full_duration};
 }
 
 int require_id(const mjModel *model, mjtObj type, const std::string &name) {
@@ -363,26 +389,20 @@ void run(Prepared prepared, const RunConfig &config) {
   if (config.plan_every_n_steps < 1 || config.planner_threads < 1 ||
       config.warmup_iterations < 1 || config.replay_every_n_steps < 1)
     throw std::runtime_error("Invalid tracking configuration");
-  if (!std::isfinite(config.duration) || config.duration < 0 ||
-      !std::isfinite(config.physics_timestep) || config.physics_timestep < 0)
-    throw std::runtime_error("Duration and timestep must be finite and nonnegative");
-  if (std::filesystem::exists(config.output_path))
-    throw std::runtime_error("Output file already exists: " +
-                             config.output_path.string());
+  if (!std::isfinite(config.physics_timestep) || config.physics_timestep < 0)
+    throw std::runtime_error("Timestep must be finite and nonnegative");
 
   auto *model = prepared.model.get();
   const Clip clip = prepared.clip;
-  const double duration =
-      config.duration == 0 ? clip.duration() : config.duration;
-  if (duration <= 0 || duration > clip.duration() + 1e-9)
-    throw std::runtime_error("Duration must fit inside the non-looping reference");
+  const ResolvedDuration duration = resolve_duration(clip, config.duration);
   if (config.physics_timestep > 0)
     model->opt.timestep = config.physics_timestep;
   const double dt = model->opt.timestep;
-  if (dt > duration || duration / dt > 1'000'000)
+  if (dt > duration.effective || duration.effective / dt > 1'000'000)
     throw std::runtime_error(
         "Choose a timestep spanning 1 to 1,000,000 steps per episode");
-  const int steps = static_cast<int>(std::ceil(duration / dt - 1e-9));
+  const int steps =
+      static_cast<int>(std::ceil(duration.effective / dt - 1e-9));
   if (steps < 1)
     throw std::runtime_error("Duration must span at least one physics step");
 
@@ -459,17 +479,17 @@ void run(Prepared prepared, const RunConfig &config) {
         step % config.replay_every_n_steps == 0 || step == steps;
     auto sample = measurements.take(model, d, capture);
     const double rmse = std::sqrt(sample.position_mse);
-    max_error = std::max(max_error, rmse);
-    if (capture)
-      frames.push_back(sample.frame);
-    else if (sample.fall)
-      frames.push_back(measurements.take(model, d, true).frame);
     elapsed = d->time;
+    // A diagnostic bundle may retain the valid prefix of a failed episode,
+    // but never records the frame containing loaded non-foot support.
     if (sample.fall) {
       first_fall = d->time;
       termination = "nonfoot_floor_contact";
       break;
     }
+    max_error = std::max(max_error, rmse);
+    if (capture)
+      frames.push_back(sample.frame);
     if (step == steps)
       break;
 
@@ -541,7 +561,9 @@ void run(Prepared prepared, const RunConfig &config) {
       {"reference_frames", clip.count},
       {"reference_fps", kReferenceFps},
       {"reference_duration_s", clip.duration()},
-      {"requested_duration_s", duration},
+      {"requested_duration_s", duration.requested},
+      {"effective_duration_s", duration.effective},
+      {"duration_capped", duration.capped},
       {"simulated_duration_s", elapsed},
       {"physics_timestep_s", dt},
       {"planning_interval_s", dt * config.plan_every_n_steps},
@@ -557,7 +579,7 @@ void run(Prepared prepared, const RunConfig &config) {
       {"termination", termination},
       {"completed_requested_duration", completed},
       {"completed_reference_clip",
-       completed && duration >= clip.duration() - 1e-9},
+       completed && duration.effective >= clip.duration() - 1e-9},
       {"first_fall_time_s", first_fall < 0 ? Json(nullptr) : Json(first_fall)},
       {"tracking_rmse_m", measured_time > 0
                               ? Json(std::sqrt(error_integral / measured_time))
@@ -597,6 +619,9 @@ void run(Prepared prepared, const RunConfig &config) {
   report["label"] = prepared.label;
   report["replay_every_n_steps"] = config.replay_every_n_steps;
   report["preparation"] = prepared.metadata;
+  if (frames.empty())
+    throw std::runtime_error(
+        "Run produced no valid frame before non-foot floor contact");
   save_run_bundle(config.output_path, model, frames, report);
   std::cout << config.motion << ": " << termination << " at " << elapsed
             << " s; RMSE " << report.at("tracking_rmse_m") << " m; wall "

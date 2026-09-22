@@ -16,23 +16,30 @@ inline constexpr std::array<const char *, 16> kTargets = {
     "lknee",     "rknee",     "lhand", "rhand", "lelbow", "relbow",
     "lshoulder", "rshoulder", "lhip",  "rhip"};
 
+// These bundled clips have foot-only source support. Hand- and knee-supported
+// acrobatics are intentionally excluded from the foot-GRF data path.
+inline constexpr std::array<const char *, 6> kFootOnlyMotions = {
+    "walk", "run", "jump", "dance", "kick_spin", "spin_kick"};
+
 struct Clip {
   int first = -1;
   int count = 0;
   double duration() const { return (count - 1) / kReferenceFps; }
 };
 Clip find_clip(const mjModel *model, const std::string &motion);
+bool is_foot_only_motion(const std::string &motion);
+std::string foot_only_motion_names();
 int require_id(const mjModel *model, mjtObj type, const std::string &name);
 
-enum class ReferenceStrategy { Raw, Rigid, Retargeted };
-
-const char *reference_strategy_name(ReferenceStrategy strategy);
-ReferenceStrategy parse_reference_strategy(const std::string &text);
+struct ResolvedDuration {
+  double requested = 0;
+  double effective = 0;
+  bool capped = false;
+};
+ResolvedDuration resolve_duration(const Clip &clip, double requested_duration);
 
 struct PrepareConfig {
   std::string motion = "walk";
-  int start_frame = 0;
-  ReferenceStrategy reference = ReferenceStrategy::Raw;
   int qmc_index = 0;
 };
 

@@ -91,6 +91,39 @@ void add_tracking_sites(mjSpec *spec, const mjModel *baseline) {
   }
 }
 
+double controller_weight(const std::string &name, double baseline_weight) {
+  // Keep the centroid/root term and effort regularization unchanged, but make
+  // the heel/toe and supporting-leg points more important than upper-body
+  // points. This is controller tuning, not a physical contact constraint:
+  // foot geometry and contact settings still need to be evaluated separately.
+  if (name == "Pos[toe]" || name == "Pos[heel]")
+    return 80.0;
+  if (name == "Vel[toe]" || name == "Vel[heel]")
+    return 0.25;
+  if (name == "Pos[knee]")
+    return 55.0;
+  if (name == "Vel[knee]")
+    return 0.18;
+  if (name == "Pos[hip]")
+    return 50.0;
+  if (name == "Vel[hip]")
+    return 0.15;
+  if (name == "Pos[pelvis]")
+    return 40.0;
+  if (name == "Vel[root]")
+    return 0.12;
+
+  if (name == "Pos[head]" || name == "Vel[head]")
+    return 0.0;
+  if (name == "Pos[hand]" || name == "Pos[elbow]" ||
+      name == "Pos[shoulder]")
+    return 8.0;
+  if (name == "Vel[hand]" || name == "Vel[elbow]" ||
+      name == "Vel[shoulder]")
+    return 0.02;
+  return baseline_weight;
+}
+
 void add_objective(mjSpec *spec, const mjModel *source,
                    const mjModel *baseline) {
   // Tracking owns its planner settings and residual sensors. Clearing the
@@ -119,9 +152,12 @@ void add_objective(mjSpec *spec, const mjModel *source,
     sensor->dim = name == "Joint Vel." ? baseline->nv - 6
                   : name == "Control"  ? baseline->nu
                                        : source->sensor_dim[i];
-    mjs_setDouble(sensor->userdata,
-                  source->sensor_user + i * source->nuser_sensor,
-                  source->nuser_sensor);
+    std::vector<double> userdata(
+        source->sensor_user + i * source->nuser_sensor,
+        source->sensor_user + (i + 1) * source->nuser_sensor);
+    if (userdata.size() > 1)
+      userdata[1] = controller_weight(name, userdata[1]);
+    mjs_setDouble(sensor->userdata, userdata.data(), userdata.size());
   }
   auto add_sensor = [&](mjtSensor type, const std::string &name,
                         mjtObj object_type, const std::string &object) {
@@ -159,13 +195,6 @@ std::array<int, 16> target_mocap_ids(const mjModel *model) {
       throw std::runtime_error("Tracking target is not a mocap body");
   }
   return ids;
-}
-
-Points positions(const mjData *data, const std::array<int, 16> &ids) {
-  Points result{};
-  for (size_t i = 0; i < ids.size(); ++i)
-    mju_copy3(result.data() + 3 * i, data->site_xpos + 3 * ids[i]);
-  return result;
 }
 
 Points source_targets(const mjModel *source, int key,
@@ -332,57 +361,10 @@ void verify_dynamics(const mjModel *baseline, const mjModel *model) {
   equal(baseline->actuator_dyntype, model->actuator_dyntype, baseline->nu);
 }
 
-Points retarget_points(const Points &raw, double global_scale,
-                       const std::array<double, 16> &ratios) {
-  constexpr std::array<int, 16> parents{-1, 0,  4,  5,  6, 7, 14, 15,
-                                        10, 11, 12, 13, 0, 0, 0,  0};
-  constexpr std::array<int, 16> order{0, 14, 15, 6,  7,  4,  5, 2,
-                                      3, 1,  12, 13, 10, 11, 8, 9};
-  Points target{};
-  for (int axis = 0; axis < 3; ++axis)
-    target[axis] = global_scale * raw[axis];
-  for (int index = 1; index < 16; ++index) {
-    const int child = order[index];
-    const int parent = parents[child];
-    for (int axis = 0; axis < 3; ++axis)
-      target[3 * child + axis] =
-          target[3 * parent + axis] +
-          ratios[child] * (raw[3 * child + axis] - raw[3 * parent + axis]);
-  }
-  return target;
-}
-
 } // namespace
-
-const char *reference_strategy_name(ReferenceStrategy strategy) {
-  switch (strategy) {
-  case ReferenceStrategy::Raw:
-    return "raw";
-  case ReferenceStrategy::Rigid:
-    return "rigid";
-  case ReferenceStrategy::Retargeted:
-    return "retargeted";
-  }
-  throw std::runtime_error("Unknown reference strategy");
-}
-
-ReferenceStrategy parse_reference_strategy(const std::string &text) {
-  if (text == "raw")
-    return ReferenceStrategy::Raw;
-  if (text == "rigid")
-    return ReferenceStrategy::Rigid;
-  if (text == "retargeted")
-    return ReferenceStrategy::Retargeted;
-  throw std::runtime_error(
-      "Reference must be raw, rigid, or retargeted: " + text);
-}
 
 Prepared prepare_custom(const std::string &model_path,
                         const PrepareConfig &config) {
-  if (config.motion != "walk" && config.motion != "run")
-    throw std::runtime_error("Motion must be walk or run");
-  if (config.start_frame < 0)
-    throw std::runtime_error("Reference start frame must be nonnegative");
   if (config.qmc_index < 0)
     throw std::runtime_error("QMC index must be nonnegative");
 
@@ -393,11 +375,12 @@ Prepared prepare_custom(const std::string &model_path,
     throw std::runtime_error(std::string("Could not load reference clips: ") +
                              error);
   const Clip source_clip = find_clip(source.get(), config.motion);
-  if (config.start_frame >= source_clip.count - 1)
+  if (!is_foot_only_motion(config.motion))
     throw std::runtime_error(
-        "Reference start must leave at least two source frames");
-  const int source_first = source_clip.first + config.start_frame;
-  const int frame_count = source_clip.count - config.start_frame;
+        "Motion is not approved for foot-only episodes: " + config.motion +
+        " (choose " + foot_only_motion_names() + ")");
+  const int source_first = source_clip.first;
+  const int frame_count = source_clip.count;
 
   SpecPtr spec(mj_parseXML(model_path.c_str(), nullptr, error, sizeof(error)),
                mj_deleteSpec);
@@ -426,58 +409,12 @@ Prepared prepare_custom(const std::string &model_path,
   const auto destination_mocap = target_mocap_ids(model);
   const auto source_mocap = target_mocap_ids(source.get());
 
-  auto rest = make_data(model);
-  auto source_rest = make_data(source.get());
-  mj_forward(model, rest.get());
-  mj_forward(source.get(), source_rest.get());
-  const Points rest_points = positions(rest.get(), sites);
-  const Points source_rest_points =
-      positions(source_rest.get(), tracking_sites(source.get()));
-
-  std::array<double, 3> rigid_translation{};
-  const Points first_raw =
-      source_targets(source.get(), source_first, source_mocap);
-  for (int axis = 0; axis < 3; ++axis)
-    rigid_translation[axis] = rest_points[axis] - first_raw[axis];
-
-  const double global_scale =
-      (rest_points[2] - lowest_foot(model, rest.get())) /
-      (source_rest_points[2] - lowest_foot(source.get(), source_rest.get()));
-  if (!std::isfinite(global_scale) || global_scale <= 0)
-    throw std::runtime_error("Invalid neutral-pose reference scale");
-  constexpr std::array<int, 16> parents{-1, 0,  4,  5,  6, 7, 14, 15,
-                                        10, 11, 12, 13, 0, 0, 0,  0};
-  std::array<double, 16> segment_ratios{};
-  for (int i = 1; i < 16; ++i) {
-    const double source_length = mju_dist3(
-        source_rest_points.data() + 3 * i,
-        source_rest_points.data() + 3 * parents[i]);
-    if (source_length <= std::numeric_limits<double>::epsilon())
-      throw std::runtime_error("Reference has a zero-length anatomical segment");
-    segment_ratios[i] =
-        mju_dist3(rest_points.data() + 3 * i,
-                  rest_points.data() + 3 * parents[i]) /
-        source_length;
-  }
-
+  // The runtime intentionally transfers the source point coordinates exactly:
+  // no rigid alignment, scaling, or source joint trajectory is applied.
   std::vector<Points> targets(frame_count);
   for (int frame = 0; frame < frame_count; ++frame) {
-    const Points raw = source_targets(source.get(), source_first + frame,
-                                      source_mocap);
-    switch (config.reference) {
-    case ReferenceStrategy::Raw:
-      targets[frame] = raw;
-      break;
-    case ReferenceStrategy::Rigid:
-      targets[frame] = raw;
-      for (int point = 0; point < 16; ++point)
-        for (int axis = 0; axis < 3; ++axis)
-          targets[frame][3 * point + axis] += rigid_translation[axis];
-      break;
-    case ReferenceStrategy::Retargeted:
-      targets[frame] = retarget_points(raw, global_scale, segment_ratios);
-      break;
-    }
+    targets[frame] = source_targets(source.get(), source_first + frame,
+                                    source_mocap);
     write_targets(model, frame, targets[frame], destination_mocap);
   }
 
@@ -510,29 +447,9 @@ Prepared prepare_custom(const std::string &model_path,
     passive_initial[name] =
         initial->qpos[model->jnt_qposadr[require_id(model, mjOBJ_JOINT, name)]];
 
-  nlohmann::json transform = {
-      {"strategy", reference_strategy_name(config.reference)},
-      {"source_joint_trajectory_used", false},
-      {"translation_m", rigid_translation},
-  };
-  if (config.reference == ReferenceStrategy::Raw) {
-    transform["kind"] = "identity";
-    transform["translation_m"] = {0.0, 0.0, 0.0};
-  } else if (config.reference == ReferenceStrategy::Rigid) {
-    transform["kind"] = "constant_world_translation";
-    transform["translation_definition"] =
-        "custom neutral pelvis tracking point minus first source pelvis point";
-  } else {
-    transform["kind"] = "neutral-pose segment-length mapping";
-    transform["pelvis_translation_scale"] = global_scale;
-    transform["segment_scales"] = segment_ratios;
-    transform["target_parents"] = parents;
-  }
-
   prepared.source = std::filesystem::absolute(model_path).string();
   prepared.label = "Custom tracking model: " +
                    std::filesystem::path(model_path).filename().string() +
-                   " / " + reference_strategy_name(config.reference) +
                    " / qmc " + std::to_string(config.qmc_index);
   prepared.clip = {0, frame_count};
   prepared.task = std::make_shared<ReferenceTask>();
@@ -561,12 +478,9 @@ Prepared prepare_custom(const std::string &model_path,
       {"na", model->na},
       {"reference_source", GRF_TRACKING_MODEL},
       {"source_first_key", source_first},
-      {"source_start_frame", config.start_frame},
-      {"source_motion_frames", source_clip.count},
       {"reference_frames", frame_count},
       {"reference_fps", kReferenceFps},
       {"target_order", kTargets},
-      {"reference_transform", transform},
       {"initialization",
        {{"seed", "custom model neutral qpos only"},
         {"initial_fit_rmse_before_floor_lift_m", initial_fit_before_lift},

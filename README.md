@@ -2,7 +2,7 @@
 
 This early research prototype uses MuJoCo and MuJoCo MPC (MJPC) to test whether the project’s male and female humanoid models can dynamically follow motion-capture-derived anatomical point trajectories. Its current job is a lean motion tracer bullet: produce one replayable tracking run and expose the contact behavior needed to judge it.
 
-The source motion is represented by 16 three-dimensional target points: pelvis, head, bilateral toe, heel, knee, hand, elbow, shoulder, and hip. The default **raw** mode transfers those blue target trajectories without dimensional scaling or source joint poses. It does not yet produce validated estimator-training labels or a learned estimator.
+The source motion is represented by 16 three-dimensional target points: pelvis, head, bilateral toe, heel, knee, hand, elbow, shoulder, and hip. The controller always transfers those blue target trajectories in **raw** source coordinates, without dimensional scaling or source joint poses. It does not yet produce validated estimator-training labels or a learned estimator.
 
 ## Build
 
@@ -30,8 +30,7 @@ Run from the repository root. The output path is explicit; **data/runs/** is ign
 ~~~bash
 ./build/data_factory run \
   --model assets/winter_baseline_male.xml \
-  --motion walk --start 0 --duration 8 \
-  --reference raw \
+  --motion walk --duration 8 \
   --qmc-index 0 \
   --output data/runs/male_walk_raw.grf
 ~~~
@@ -41,21 +40,14 @@ Use --render to show the recorded replay immediately after the run:
 ~~~bash
 ./build/data_factory run \
   --model assets/plagenhoef_baseline_female.xml \
-  --motion walk --start 0 --duration 8 \
-  --reference rigid \
-  --output data/runs/female_walk_rigid.grf \
+  --motion walk --duration 8 \
+  --output data/runs/female_walk_raw.grf \
   --render
 ~~~
 
-**walk** includes the source clip’s standing lead-in. **run** selects the shorter, higher-dynamic source clip. --start must align with its 30 Hz source frames; --duration must fit within the remaining non-looping clip. The runtime uses 2400 Hz physics, replans every 15 ms, evaluates the current policy at every physics step, and uses one planner worker unless --threads is supplied.
+**walk** includes the source clip’s standing lead-in. The foot-only source clips are `walk`, `run`, `jump`, `dance`, `kick_spin`, and `spin_kick`; hand- or knee-supported acrobatics are intentionally excluded. Every run starts at source frame zero. Omit `--duration` for the full non-looping clip; a longer value stops at the clip end and the bundle records requested/effective/capped duration. An existing `--output` bundle is replaced only after the new bundle is written successfully. The runtime uses 2400 Hz physics, replans every 15 ms, evaluates the current policy at every physics step, and uses one planner worker unless `--threads` is supplied.
 
-| --reference value | Target preparation |
-| --- | --- |
-| raw | Original source target-point coordinates, with no source joint trajectory or scaling. |
-| rigid | raw plus one fixed world translation that aligns the first source pelvis point to the custom model’s neutral pelvis tracking point. |
-| retargeted | A named comparison that maps neutral anatomical segment lengths. It is not the default. |
-
-Each strategy fits an initial custom-model pose from the first target points and the custom model’s neutral state only. That initialization does not alter the stored target trajectory.
+The tracker copies the ordered 16 source points exactly, including for nonzero QMC morphology draws: there is no scale, alignment, or retargeting option. A one-time neutral-seeded pose fit and floor clearance configure the custom model’s initial physical state only; they never alter stored target coordinates. This is the intended input contract for future sources after their trajectories are distilled into the same ordered 16 points; external-trajectory import is not implemented yet.
 
 | QMC option | Default | Meaning |
 | --- | ---: | --- |
@@ -73,7 +65,7 @@ One episode index avoids two coupled command-line knobs while keeping morphology
 
 Each .grf file is a self-contained binary bundle containing the compiled model, 200 Hz sampled states and targets, force/contact diagnostics, and a JSON summary. New bundles include QMC marker sites; older saved bundles do not gain them retroactively. Replay loads its model from memory and does not replan or write side files. A new QMC bundle shows blue targets, orange tracking sites, red massless markers, and cyan GRF arrows. The red markers are rendered as decorative overlays, so they remain attached to the model without casting a collective ground shadow.
 
-The force arrows begin at a vertical-force-weighted contact-position proxy. They are useful diagnostics, not validated CoP labels. A run stops at a loaded non-foot floor contact or numerical failure.
+The force arrows begin at a vertical-force-weighted contact-position proxy. They are useful diagnostics, not validated CoP labels. A run stops before recording a loaded non-foot floor-contact frame or on numerical failure; use only bundles whose `completed_requested_duration` is true for downstream episodes.
 
 ## Current scope
 
@@ -90,7 +82,7 @@ cmake --build build --target tracking_contract_test tracking_integration_test --
 ctest --test-dir build --output-on-failure
 ~~~
 
-The contract test verifies raw target identity, the rigid-transform invariant, the retargeted comparison path, one-index QMC morphology/marker behavior and marker attachment, reference interpolation, and that target updates do not overwrite physical state. The integration test performs short nominal and nonzero-QMC raw rollouts, reloads each bundle, and removes its build-local artifacts.
+The contract test verifies raw target identity for nominal and QMC models, extra foot-only source clips, duration capping, controller cost weights, QMC marker behavior, interpolation, and target-only transitions. The integration test performs short nominal/nonzero-QMC rollouts, verifies replacement of an existing bundle, reloads each result, and removes its build-local artifacts.
 
 ## Repository layout
 

@@ -15,6 +15,22 @@ void require(bool value, const char *message) {
     throw std::runtime_error(message);
 }
 
+bool has_temporary_sibling(const std::filesystem::path &output) {
+  const auto parent = output.parent_path().empty()
+                          ? std::filesystem::current_path()
+                          : output.parent_path();
+  const std::string prefix = output.filename().string() + ".partial.";
+  std::error_code error;
+  for (std::filesystem::directory_iterator it(parent, error), end;
+       !error && it != end; it.increment(error)) {
+    if (it->path().filename().string().rfind(prefix, 0) == 0)
+      return true;
+  }
+  if (error)
+    throw std::runtime_error("Could not inspect run-bundle temporary files");
+  return false;
+}
+
 class Cleanup {
 public:
   explicit Cleanup(std::filesystem::path path) : path_(std::move(path)) {
@@ -33,13 +49,12 @@ private:
 };
 
 void exercise(const std::filesystem::path &model, const std::string &label,
-              int qmc_index = 0) {
+              int qmc_index = 0, bool verify_overwrite = false) {
   const auto output =
       std::filesystem::current_path() / ("tracking_integration_" + label + ".grf");
   Cleanup cleanup(output);
   tracking::PrepareConfig prepare;
   prepare.motion = "walk";
-  prepare.reference = tracking::ReferenceStrategy::Raw;
   prepare.qmc_index = qmc_index;
   tracking::RunConfig config;
   config.motion = prepare.motion;
@@ -49,13 +64,13 @@ void exercise(const std::filesystem::path &model, const std::string &label,
   tracking::run(tracking::prepare_custom(model.string(), prepare), config);
 
   require(std::filesystem::exists(output), "Run did not write its bundle");
-  require(!std::filesystem::exists(output.string() + ".partial"),
-          "Run left a partial bundle");
+  require(!has_temporary_sibling(output), "Run left a temporary bundle");
   const auto bundle = tracking::load_run_bundle(output);
   require(bundle.model != nullptr && !bundle.frames.empty(),
           "Bundle replay did not load");
-  require(bundle.summary.at("completed_requested_duration").get<bool>(),
-          "Short raw rollout did not complete");
+  require(bundle.summary.at("completed_requested_duration").get<bool>() &&
+              !bundle.summary.at("duration_capped").get<bool>(),
+          "Short raw rollout did not complete normally");
   require(bundle.summary.at("state_resets_after_initialization").get<int>() == 0,
           "Reference reset the physical state");
   require(bundle.summary.at("action_evaluations").get<int>() ==
@@ -65,10 +80,6 @@ void exercise(const std::filesystem::path &model, const std::string &label,
                    1.0 / 2400.0) <
               1e-12,
           "Unexpected physics timestep");
-  require(bundle.summary.at("preparation")
-              .at("reference_transform")
-              .at("strategy") == "raw",
-          "Bundle did not retain reference strategy");
   const auto marker_sites = tracking::qmc_marker_site_ids(bundle.model.get());
   require(!marker_sites.empty() &&
               bundle.summary.at("preparation")
@@ -89,12 +100,28 @@ void exercise(const std::filesystem::path &model, const std::string &label,
   require(std::isfinite(frame.left_contact.pitch) &&
               std::isfinite(frame.right_contact.mtp_velocity),
           "Bundle contact diagnostics are non-finite");
+
+  if (verify_overwrite) {
+    config.duration = .02;
+    tracking::run(tracking::prepare_custom(model.string(), prepare), config);
+    require(std::filesystem::exists(output) && !has_temporary_sibling(output),
+            "Replacement run did not finalize its bundle");
+    const auto replacement = tracking::load_run_bundle(output);
+    require(std::abs(replacement.summary.at("requested_duration_s").get<double>() -
+                         .02) <
+                1e-12 &&
+                std::abs(replacement.summary.at("effective_duration_s")
+                             .get<double>() -
+                         .02) <
+                    1e-12,
+            "Existing output was not replaced by the new run");
+  }
 }
 } // namespace
 
 int main(int argc, char **argv) try {
   require(argc == 3, "Supply both baseline XMLs");
-  exercise(argv[1], "male");
+  exercise(argv[1], "male", 0, true);
   exercise(argv[2], "female");
   exercise(argv[1], "male_qmc", 2);
   std::cout << "Raw tracking run-bundle integration checks passed.\n";

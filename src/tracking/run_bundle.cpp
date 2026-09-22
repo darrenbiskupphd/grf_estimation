@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <climits>
 #include <cstdint>
 #include <cstring>
@@ -142,18 +144,34 @@ void validate_frame(const ReplayFrame &frame, const mjModel *model,
     throw std::runtime_error("Negative contact count in GRF run bundle");
 }
 
+std::filesystem::path
+unique_partial_path(const std::filesystem::path &destination) {
+  static std::atomic_uint64_t sequence{0};
+  const auto parent = destination.parent_path();
+  const auto prefix = destination.filename().string() + ".partial.";
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto candidate =
+        parent / (prefix + std::to_string(tick) + "." +
+                  std::to_string(sequence.fetch_add(1)));
+    std::error_code error;
+    const bool exists = std::filesystem::exists(candidate, error);
+    if (error)
+      throw std::runtime_error("Could not create temporary run bundle: " +
+                               error.message());
+    if (!exists)
+      return candidate;
+  }
+  throw std::runtime_error("Could not allocate a temporary run bundle path");
+}
+
 class PartialFile {
 public:
   explicit PartialFile(const std::filesystem::path &destination)
-      : destination_(destination), partial_(destination.string() + ".partial") {
-    if (std::filesystem::exists(destination_))
-      throw std::runtime_error("Output file already exists: " +
-                               destination_.string());
-    if (std::filesystem::exists(partial_))
-      throw std::runtime_error("Incomplete output already exists: " +
-                               partial_.string());
+      : destination_(destination) {
     if (const auto parent = destination_.parent_path(); !parent.empty())
       std::filesystem::create_directories(parent);
+    partial_ = unique_partial_path(destination_);
   }
   ~PartialFile() {
     if (!committed_) {

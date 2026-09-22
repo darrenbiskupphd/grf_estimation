@@ -16,8 +16,8 @@ struct RunBundle {
 };
 
 // Stores the compiled model, sampled frames, and a small JSON summary in one
-// self-contained file.  The write is atomic at the output-path level: a
-// sibling .partial file is removed on failure and renamed only on success.
+// self-contained file. A unique sibling temporary is removed on failure and
+// atomically renamed over the output only after a successful write.
 void save_run_bundle(const std::filesystem::path &path, const mjModel *model,
                      const std::vector<ReplayFrame> &frames,
                      const nlohmann::json &summary);

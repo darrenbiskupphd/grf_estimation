@@ -4,7 +4,7 @@
 
 namespace tracking {
 // Same objective and cost layout as the pinned MJPC humanoid Tracking task,
-// with a single retargeted clip and no state changes inside Transition.
+// with one raw point clip and no state changes inside Transition.
 class ReferenceTask final : public mjpc::Task {
 public:
   ReferenceTask() : residual_(this) {}

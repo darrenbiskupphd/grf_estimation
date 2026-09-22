@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "mujoco_raii.hpp"
@@ -30,7 +31,7 @@ void verify_raw_identity(const mjModel *source, const mjModel *raw,
                          int source_first) {
   const auto source_mocap = mocap_ids(source);
   const auto raw_mocap = mocap_ids(raw);
-  for (int frame : {0, 1, raw->nkey - 1}) {
+  for (int frame = 0; frame < raw->nkey; ++frame) {
     for (int target = 0; target < 16; ++target) {
       const double *expected =
           source->key_mpos + 3 * source->nmocap * (source_first + frame) +
@@ -38,29 +39,27 @@ void verify_raw_identity(const mjModel *source, const mjModel *raw,
       const double *actual =
           raw->key_mpos + 3 * raw->nmocap * frame + 3 * raw_mocap[target];
       require(std::equal(expected, expected + 3, actual),
-              "Raw strategy changed a source target coordinate");
+              "Raw target transfer changed a source coordinate");
     }
   }
 }
 
-void verify_rigid_difference(const mjModel *raw, const mjModel *rigid,
-                             const std::array<double, 3> &translation) {
-  const auto raw_mocap = mocap_ids(raw);
-  const auto rigid_mocap = mocap_ids(rigid);
-  require(raw->nkey == rigid->nkey, "Raw and rigid frame counts differ");
-  for (int frame : {0, 1, raw->nkey - 1}) {
-    for (int target = 0; target < 16; ++target) {
-      const double *raw_point =
-          raw->key_mpos + 3 * raw->nmocap * frame + 3 * raw_mocap[target];
-      const double *rigid_point =
-          rigid->key_mpos + 3 * rigid->nmocap * frame + 3 * rigid_mocap[target];
-      for (int axis = 0; axis < 3; ++axis)
-        require(std::abs(rigid_point[axis] - raw_point[axis] -
-                             translation[axis]) <
-                    1e-12,
-                "Rigid strategy changed a point displacement");
-    }
-  }
+double sensor_weight(const mjModel *model, const char *name) {
+  const int sensor = mj_name2id(model, mjOBJ_SENSOR, name);
+  require(sensor >= 0, "Expected tracking cost sensor is missing");
+  return model->sensor_user[sensor * model->nuser_sensor + 1];
+}
+
+void verify_controller_weights(const mjModel *model) {
+  require(sensor_weight(model, "Pos[toe]") == 80.0 &&
+              sensor_weight(model, "Pos[heel]") == 80.0 &&
+              sensor_weight(model, "Pos[knee]") == 55.0 &&
+              sensor_weight(model, "Pos[hip]") == 50.0,
+          "Controller foot/leg weights are not tuned as expected");
+  require(sensor_weight(model, "Pos[hand]") == 8.0 &&
+              sensor_weight(model, "Pos[elbow]") == 8.0 &&
+              sensor_weight(model, "Pos[shoulder]") == 8.0,
+          "Controller upper-body weights are not relaxed");
 }
 
 void verify_task_contract(tracking::Prepared &prepared) {
@@ -162,10 +161,50 @@ void verify_qmc_sampling(const tracking::Prepared &nominal,
               variant_positions,
           "QMC marker placement did not respond to its index");
 }
+
+void verify_duration_resolution() {
+  const tracking::Clip clip{7, 39};
+  const auto full = tracking::resolve_duration(clip, 0);
+  require(std::abs(full.requested - clip.duration()) < 1e-12 &&
+              std::abs(full.effective - clip.duration()) < 1e-12 &&
+              !full.capped,
+          "Default duration did not select the full clip");
+  const auto capped = tracking::resolve_duration(clip, clip.duration() + 10);
+  require(std::abs(capped.requested - (clip.duration() + 10)) < 1e-12 &&
+              std::abs(capped.effective - clip.duration()) < 1e-12 &&
+              capped.capped,
+          "Long duration was not capped at the clip end");
+}
+
+void verify_extra_foot_only_motions(const char *model_path,
+                                    const mjModel *source) {
+  for (const char *motion : {"jump", "dance", "kick_spin", "spin_kick"}) {
+    require(tracking::is_foot_only_motion(motion),
+            "Foot-only motion is missing from the catalog");
+    tracking::PrepareConfig config;
+    config.motion = motion;
+    auto prepared = tracking::prepare_custom(model_path, config);
+    const auto source_clip = tracking::find_clip(source, motion);
+    require(prepared.clip.count == source_clip.count,
+            "Prepared extra motion has the wrong frame count");
+    verify_raw_identity(source, prepared.model.get(), source_clip.first);
+  }
+
+  tracking::PrepareConfig unsafe;
+  unsafe.motion = "cartwheel1";
+  bool rejected = false;
+  try {
+    (void)tracking::prepare_custom(model_path, unsafe);
+  } catch (const std::runtime_error &) {
+    rejected = true;
+  }
+  require(rejected, "Hand-supported motion was accepted for foot-only data");
+}
 } // namespace
 
 int main(int argc, char **argv) try {
   require(argc == 3, "Supply both baseline XMLs");
+  verify_duration_resolution();
   char error[2048] = {};
   ModelPtr source(mj_loadXML(GRF_TRACKING_MODEL, nullptr, error, sizeof(error)),
                   mj_deleteModel);
@@ -175,47 +214,29 @@ int main(int argc, char **argv) try {
   for (int input = 1; input < argc; ++input) {
     tracking::PrepareConfig raw_config;
     raw_config.motion = "walk";
-    raw_config.reference = tracking::ReferenceStrategy::Raw;
     auto raw = tracking::prepare_custom(argv[input], raw_config);
     auto *raw_model = raw.model.get();
     require(raw_model->nq == 32 && raw_model->nv == 31 && raw_model->na == 21,
             "Unexpected custom model state dimensions");
     require(raw_model->nmocap == 16 && raw_model->nkey == source_clip.count,
             "Wrong raw reference dimensions");
-    require(raw.metadata.at("reference_transform").at("kind") == "identity",
-            "Raw strategy must have an identity transform");
-    require(!raw.metadata.at("reference_transform")
-                 .at("source_joint_trajectory_used")
-                 .get<bool>(),
-            "Raw strategy used source joints");
     require(std::isfinite(raw.metadata.at("initialization")
                               .at("initial_fit_rmse_m")
                               .get<double>()),
             "Raw initial fit is non-finite");
     verify_raw_identity(source.get(), raw_model, source_clip.first);
-
-    tracking::PrepareConfig rigid_config = raw_config;
-    rigid_config.reference = tracking::ReferenceStrategy::Rigid;
-    auto rigid = tracking::prepare_custom(argv[input], rigid_config);
-    const auto transform =
-        rigid.metadata.at("reference_transform").at("translation_m")
-            .get<std::array<double, 3>>();
-    verify_rigid_difference(raw_model, rigid.model.get(), transform);
-
-    tracking::PrepareConfig retargeted_config = raw_config;
-    retargeted_config.reference = tracking::ReferenceStrategy::Retargeted;
-    auto retargeted = tracking::prepare_custom(argv[input], retargeted_config);
-    require(retargeted.metadata.at("reference_transform").at("kind") ==
-                "neutral-pose segment-length mapping",
-            "Retargeted strategy metadata is missing");
+    verify_controller_weights(raw_model);
 
     tracking::PrepareConfig qmc_config = raw_config;
     qmc_config.qmc_index = 2;
     auto qmc_variant = tracking::prepare_custom(argv[input], qmc_config);
+    verify_raw_identity(source.get(), qmc_variant.model.get(),
+                        source_clip.first);
     verify_qmc_sampling(raw, qmc_variant);
     verify_task_contract(raw);
   }
-  std::cout << "Point-reference strategy and task-contract checks passed.\n";
+  verify_extra_foot_only_motions(argv[1], source.get());
+  std::cout << "Raw point-reference and task-contract checks passed.\n";
   return 0;
 } catch (const std::exception &error) {
   std::cerr << error.what() << '\n';

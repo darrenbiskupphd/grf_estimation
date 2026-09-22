@@ -32,25 +32,14 @@ void usage(std::ostream &stream) {
       << "  data_factory replay <run.grf> [--speed <multiplier>]\n\n"
       << "Run options:\n"
       << "  --model <XML>                 assets/winter_baseline_male.xml\n"
-      << "  --motion walk|run             walk\n"
-      << "  --start <seconds>             0 (must align to 30 Hz source frames)\n"
-      << "  --duration <seconds>          full remaining reference\n"
-      << "  --reference raw|rigid|retargeted  raw\n"
-      << "  --qmc-index <index>          0 (nominal body, canonical markers)\n"
+      << "  --motion <name>               "
+      << tracking::foot_only_motion_names() << " (walk)\n"
+      << "  --duration <seconds>          full clip (caps at clip end)\n"
+      << "  --qmc-index <index>           0 (nominal body, canonical markers)\n"
       << "  --threads <count>             1\n"
       << "  --render                      render the saved in-memory replay\n\n"
       << "Replay options:\n"
       << "  --speed <multiplier>          1 (for example .25 for quarter speed)\n";
-}
-
-int frame_at(double seconds) {
-  if (seconds < 0)
-    throw std::runtime_error("--start must be nonnegative");
-  const double frames = seconds * tracking::kReferenceFps;
-  const int rounded = static_cast<int>(std::llround(frames));
-  if (std::abs(frames - rounded) > 1e-8)
-    throw std::runtime_error("--start must align to the 30 Hz source frames");
-  return rounded;
 }
 
 int run(int argc, char **argv) {
@@ -65,14 +54,10 @@ int run(int argc, char **argv) {
     } else if (arg == "--motion" && i + 1 < argc) {
       prepare.motion = argv[++i];
       config.motion = prepare.motion;
-    } else if (arg == "--start" && i + 1 < argc) {
-      prepare.start_frame = frame_at(number(argv[++i]));
     } else if (arg == "--duration" && i + 1 < argc) {
       config.duration = number(argv[++i]);
       if (config.duration <= 0)
         throw std::runtime_error("--duration must be positive");
-    } else if (arg == "--reference" && i + 1 < argc) {
-      prepare.reference = tracking::parse_reference_strategy(argv[++i]);
     } else if (arg == "--qmc-index" && i + 1 < argc) {
       prepare.qmc_index = integer(argv[++i]);
       if (prepare.qmc_index < 0)
