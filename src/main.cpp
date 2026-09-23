@@ -82,7 +82,8 @@ int run(int argc, char **argv) {
     throw std::runtime_error("run requires --output <run.grf>");
   if (config.output_path.extension() != ".grf")
     throw std::runtime_error("Run output must use the .grf extension");
-  tracking::run(tracking::prepare_custom(model_path, prepare), config);
+  tracking::run(tracking::build_reference_tracking_model(model_path, prepare),
+                config);
   return 0;
 }
 

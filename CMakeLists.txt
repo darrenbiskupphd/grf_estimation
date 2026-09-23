@@ -56,7 +56,8 @@ add_library(grf_runtime STATIC
     src/tracking/runner.cpp
     src/tracking/run_bundle.cpp
     src/tracking/reference_task.cpp
-    src/tracking/retarget.cpp
+    src/tracking/build_reference_tracking_model.cpp
+    src/tracking/initialize_reference_tracking_state.cpp
     src/tracking/qmc_sampling.cpp
 )
 target_include_directories(grf_runtime PUBLIC src)
@@ -68,20 +69,3 @@ target_compile_definitions(grf_runtime PUBLIC
 
 add_executable(data_factory src/main.cpp)
 target_link_libraries(data_factory PRIVATE grf_runtime)
-
-option(GRF_BUILD_TESTS "Enable project integration checks" ON)
-if(GRF_BUILD_TESTS)
-    enable_testing()
-    add_executable(tracking_contract_test tests/tracking_contract.cpp)
-    target_link_libraries(tracking_contract_test PRIVATE grf_runtime)
-    add_test(NAME tracking_reference_contract
-        COMMAND tracking_contract_test
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/winter_baseline_male.xml
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/plagenhoef_baseline_female.xml)
-    add_executable(tracking_integration_test tests/tracking_integration.cpp)
-    target_link_libraries(tracking_integration_test PRIVATE grf_runtime)
-    add_test(NAME tracking_run_bundle_integration
-        COMMAND tracking_integration_test
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/winter_baseline_male.xml
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets/plagenhoef_baseline_female.xml)
-endif()

@@ -16,10 +16,10 @@ inline constexpr std::array<const char *, 16> kTargets = {
     "lknee",     "rknee",     "lhand", "rhand", "lelbow", "relbow",
     "lshoulder", "rshoulder", "lhip",  "rhip"};
 
-// These bundled clips have foot-only source support. Hand- and knee-supported
-// acrobatics are intentionally excluded from the foot-GRF data path.
-inline constexpr std::array<const char *, 6> kFootOnlyMotions = {
-    "walk", "run", "jump", "dance", "kick_spin", "spin_kick"};
+// Approved bundled clips with foot-only support. The 39-frame run clip is
+// retired; hand- and knee-supported acrobatics are also excluded.
+inline constexpr std::array<const char *, 5> kFootOnlyMotions = {
+    "walk", "jump", "dance", "kick_spin", "spin_kick"};
 
 struct Clip {
   int first = -1;
@@ -65,6 +65,12 @@ struct Prepared {
 };
 
 void run(Prepared prepared, const RunConfig &config);
-Prepared prepare_custom(const std::string &model_path,
-                        const PrepareConfig &config);
+Prepared build_reference_tracking_model(const std::string &model_path,
+                                        const PrepareConfig &config);
+
+// Set initial physical key states from two raw reference samples and return
+// diagnostics. This never modifies the reference coordinates or model physics.
+nlohmann::json initialize_reference_tracking_state(
+    mjModel *model, const std::array<double, 48> &first_targets,
+    const std::array<double, 48> &second_targets);
 } // namespace tracking

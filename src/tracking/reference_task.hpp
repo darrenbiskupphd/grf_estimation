@@ -3,6 +3,10 @@
 #include "tracking.hpp"
 
 namespace tracking {
+// Install planner settings and cost/sensor layout without changing physics.
+void add_reference_tracking_objective(mjSpec *spec, const mjModel *source,
+                                      const mjModel *baseline);
+
 // Same objective and cost layout as the pinned MJPC humanoid Tracking task,
 // with one raw point clip and no state changes inside Transition.
 class ReferenceTask final : public mjpc::Task {

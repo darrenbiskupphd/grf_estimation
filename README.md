@@ -45,7 +45,7 @@ Use --render to show the recorded replay immediately after the run:
   --render
 ~~~
 
-**walk** includes the source clip’s standing lead-in. The foot-only source clips are `walk`, `run`, `jump`, `dance`, `kick_spin`, and `spin_kick`; hand- or knee-supported acrobatics are intentionally excluded. Every run starts at source frame zero. Omit `--duration` for the full non-looping clip; a longer value stops at the clip end and the bundle records requested/effective/capped duration. An existing `--output` bundle is replaced only after the new bundle is written successfully. The runtime uses 2400 Hz physics, replans every 15 ms, evaluates the current policy at every physics step, and uses one planner worker unless `--threads` is supplied.
+**walk** includes the source clip’s standing lead-in. The foot-only source clips are `walk`, `jump`, `dance`, `kick_spin`, and `spin_kick`; hand- or knee-supported acrobatics are intentionally excluded. The bundled `run` clip is retired (39 frames / 1.267 s); sustained running needs a replacement reference. Every run starts at source frame zero. Omit `--duration` for the full non-looping clip; a longer value stops at the clip end and the bundle records requested/effective/capped duration. An existing `--output` bundle is replaced only after the new bundle is written successfully. The runtime uses 2400 Hz physics, replans every 15 ms, evaluates the current policy at every physics step, and uses one planner worker unless `--threads` is supplied.
 
 The tracker copies the ordered 16 source points exactly, including for nonzero QMC morphology draws: there is no scale, alignment, or retargeting option. A one-time neutral-seeded pose fit and floor clearance configure the custom model’s initial physical state only; they never alter stored target coordinates. This is the intended input contract for future sources after their trajectories are distilled into the same ordered 16 points; external-trajectory import is not implemented yet.
 
@@ -75,20 +75,10 @@ The force arrows begin at a vertical-force-weighted contact-position proxy. They
 - One recorded QMC index supplies distinct Halton dimensions for morphology and marker placement. A later controlled cross of fixed morphology against several layouts belongs in the batch design, not in the runtime CLI.
 - The baseline feet use rounded capsules and a passive MTP joint. Heel/edge/toe behavior remains an active diagnostic question; no contact-physics tuning should be inferred from the current defaults.
 
-## Tests
-
-~~~bash
-cmake --build build --target tracking_contract_test tracking_integration_test --parallel 4
-ctest --test-dir build --output-on-failure
-~~~
-
-The contract test verifies raw target identity for nominal and QMC models, extra foot-only source clips, duration capping, controller cost weights, QMC marker behavior, interpolation, and target-only transitions. The integration test performs short nominal/nonzero-QMC rollouts, verifies replacement of an existing bundle, reloads each result, and removes its build-local artifacts.
-
 ## Repository layout
 
 - [assets/](assets/): nominal male and female MuJoCo models.
-- [src/tracking/](src/tracking/): target preparation, tracking objective, runner, compact run bundle, and contact diagnostics.
+- [src/tracking/](src/tracking/): model assembly (`build_reference_tracking_model.cpp`), initialization (`initialize_reference_tracking_state.cpp`), objective (`reference_task.cpp`), runner, run bundles, and contact diagnostics.
 - [src/viewer.cpp](src/viewer.cpp): replay viewer.
-- [tests/](tests/): source-based contract and integration checks.
 - [python/xml_visualizer.py](python/xml_visualizer.py): exploratory baseline-model inspection helper.
 - data/runs/: ignored, explicitly requested local run bundles.

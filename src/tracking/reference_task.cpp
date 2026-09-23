@@ -2,9 +2,43 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace tracking {
 namespace {
+void clear_elements(mjSpec *spec, mjtObj type) {
+  while (auto *element = mjs_firstElement(spec, type))
+    mjs_delete(element);
+}
+
+double controller_weight(const std::string &name, double baseline_weight) {
+  // This is the frozen baseline objective, not a physical contact constraint.
+  // Keep these settings beside the residual layout they weight.
+  if (name == "Pos[toe]" || name == "Pos[heel]")
+    return 80.0;
+  if (name == "Vel[toe]" || name == "Vel[heel]")
+    return 0.25;
+  if (name == "Pos[knee]")
+    return 55.0;
+  if (name == "Vel[knee]")
+    return 0.18;
+  if (name == "Pos[hip]")
+    return 50.0;
+  if (name == "Vel[hip]")
+    return 0.15;
+  if (name == "Pos[pelvis]")
+    return 40.0;
+  if (name == "Vel[root]")
+    return 0.12;
+  if (name == "Pos[head]" || name == "Vel[head]")
+    return 0.0;
+  if (name == "Pos[hand]" || name == "Pos[elbow]" || name == "Pos[shoulder]")
+    return 8.0;
+  if (name == "Vel[hand]" || name == "Vel[elbow]" || name == "Vel[shoulder]")
+    return 0.02;
+  return baseline_weight;
+}
+
 struct Interpolation {
   int first, next;
   double fraction;
@@ -16,6 +50,58 @@ Interpolation interpolate(const mjModel *model, double time) {
   return {first, std::min(first + 1, model->nkey - 1), index - first};
 }
 } // namespace
+
+void add_reference_tracking_objective(mjSpec *spec, const mjModel *source,
+                                      const mjModel *baseline) {
+  // Replace inherited task configuration; the builder adds the selected clip's
+  // keyframes afterward. Physical model settings are deliberately untouched.
+  clear_elements(spec, mjOBJ_SENSOR);
+  clear_elements(spec, mjOBJ_NUMERIC);
+  clear_elements(spec, mjOBJ_TEXT);
+  clear_elements(spec, mjOBJ_KEY);
+  for (int i = 0; i < source->nnumeric; ++i) {
+    auto *numeric = mjs_addNumeric(spec);
+    mjs_setString(numeric->name, mj_id2name(source, mjOBJ_NUMERIC, i));
+    mjs_setDouble(numeric->data, source->numeric_data + source->numeric_adr[i],
+                  source->numeric_size[i]);
+  }
+  // Adjust the stock layout for the custom model's four passive DOFs.
+  for (int i = 0; i < source->nsensor; ++i) {
+    if (source->sensor_type[i] != mjSENS_USER)
+      continue;
+    auto *sensor = mjs_addSensor(spec);
+    const std::string name = mj_id2name(source, mjOBJ_SENSOR, i);
+    mjs_setString(sensor->name, name.c_str());
+    sensor->type = mjSENS_USER;
+    sensor->needstage = mjSTAGE_ACC;
+    sensor->datatype = mjDATATYPE_REAL;
+    sensor->dim = name == "Joint Vel." ? baseline->nv - 6
+                  : name == "Control"  ? baseline->nu
+                                       : source->sensor_dim[i];
+    std::vector<double> userdata(source->sensor_user + i * source->nuser_sensor,
+                                 source->sensor_user +
+                                     (i + 1) * source->nuser_sensor);
+    if (userdata.size() > 1)
+      userdata[1] = controller_weight(name, userdata[1]);
+    mjs_setDouble(sensor->userdata, userdata.data(), userdata.size());
+  }
+  auto add_sensor = [&](mjtSensor type, const std::string &name,
+                        mjtObj object_type, const std::string &object) {
+    auto *s = mjs_addSensor(spec);
+    mjs_setString(s->name, name.c_str());
+    s->type = type;
+    s->objtype = object_type;
+    mjs_setString(s->objname, object.c_str());
+  };
+  add_sensor(mjSENS_FRAMEPOS, "trace0", mjOBJ_BODY, "torso");
+  for (const char *target : kTargets) {
+    const std::string suffix = std::string("[") + target + "]";
+    add_sensor(mjSENS_FRAMEPOS, "tracking_pos" + suffix, mjOBJ_SITE,
+               "tracking" + suffix);
+    add_sensor(mjSENS_FRAMELINVEL, "tracking_linvel" + suffix, mjOBJ_SITE,
+               "tracking" + suffix);
+  }
+}
 
 void ReferenceTask::ResetLocked(const mjModel *model) {
   if (model->nkey < 2 || model->nmocap != 16 || model->njnt == 0 ||
