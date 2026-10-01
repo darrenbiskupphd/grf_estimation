@@ -179,7 +179,14 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       apply_morphology_qmc(spec.get(), config.qmc_index);
   auto baseline = compile(spec.get());
   add_tracking_sites(spec.get(), baseline.get());
-  add_reference_tracking_objective(spec.get(), source.get(), baseline.get());
+  add_reference_tracking_objective(spec.get(), source.get(), baseline.get(),
+                                    config.effort_rate_weight,
+                                    config.stance_roll_weight,
+                                    config.knee_hip_position_scale,
+                                    config.stance_roll_still_time_s,
+                                    config.elbow_velocity_weight,
+                                    config.elbow_position_weight,
+                                    config.hand_position_weight);
   const int marker_site_count =
       add_qmc_marker_sites(spec.get(), baseline.get());
   for (int frame = 0; frame < frame_count; ++frame) {
@@ -244,6 +251,38 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       {"target_order", kTargets},
       {"initialization", initialization},
       {"training_labels_validated", false}};
+  prepared.metadata["effort_rate_cost"] = {
+      {"weight", config.effort_rate_weight},
+      {"activation_rate_scale_per_s", kEffortRateScale},
+      {"definition", "0.5 * weight * mean((activation_rate / scale)^2); "
+                     "activation_rate = (clamped_ctrl - act) / filter_time"},
+      {"enabled", config.effort_rate_weight > 0}};
+  prepared.metadata["stance_roll_cost"] = {
+      {"enabled", config.stance_roll_weight > 0},
+      {"weight", config.stance_roll_weight},
+      {"definition", "0.5 * weight * mean(reference_stance_gate * "
+                     "foot_lateral_roll_rad^2); no pitch penalty"},
+      {"gate", "minimum of each foot's toe/heel smooth height and horizontal-"
+               "speed scores from raw reference keys, interpolated in time"},
+      {"height_full_m", kStanceHeightFull},
+      {"height_off_m", kStanceHeightOff},
+      {"horizontal_speed_full_m_per_s", kStanceSpeedFull},
+      {"horizontal_speed_off_m_per_s", kStanceSpeedOff},
+      {"minimum_continuous_reference_stance_s",
+       config.stance_roll_still_time_s}};
+  prepared.metadata["knee_hip_position_scale"] =
+      config.knee_hip_position_scale;
+  prepared.metadata["elbow_velocity_tracking"] = {
+      {"weight", config.elbow_velocity_weight},
+      {"baseline_weight", 0.02},
+      {"definition", "existing Vel[elbow] reference minus site velocity; "
+                     "smooth-absolute norm, scale 0.3; NOT absolute speed"}};
+  prepared.metadata["upper_position_tracking"] = {
+      {"elbow_weight", config.elbow_position_weight},
+      {"hand_weight", config.hand_position_weight},
+      {"shoulder_weight", 8.0},
+      {"definition", "existing bilateral demeaned Pos[elbow] (smooth-absolute-2) "
+                     "and Pos[hand] (smooth-absolute) weights; no physical change"}};
   return prepared;
 }
 

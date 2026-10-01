@@ -2,6 +2,7 @@
 
 #include <GLFW/glfw3.h>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 
@@ -9,6 +10,8 @@
 #include "tracking/qmc_sampling.hpp"
 
 namespace {
+constexpr double kGrfArrowScale = 0.003; // Display meters per newton.
+
 struct GlfwSession {
   GlfwSession() {
     if (!glfwInit())
@@ -140,6 +143,19 @@ void render_replay(mjModel *m,
   mjv_makeScene(m, &scn, 2000);
   mjr_makeContext(m, &con, mjFONTSCALE_150);
 
+  // Model lights follow the optional headlight in the abstract scene. Keep
+  // the overhead shadow for depth, but suppress the long side-light shadow.
+  int side_light_scene_index = -1;
+  int scene_light_index = m->vis.headlight.active ? 1 : 0;
+  for (int i = 0; i < m->nlight; ++i) {
+    if (!m->light_active[i])
+      continue;
+    const char *name = mj_id2name(m, mjOBJ_LIGHT, i);
+    if (name && std::strcmp(name, "spotlight") == 0)
+      side_light_scene_index = scene_light_index;
+    ++scene_light_index;
+  }
+
   // Group 2 contains the blue reference targets and orange tracking sites.
   opt.sitegroup[2] = 1;
   // QMC sites are drawn below as decorative geometry. Showing their native
@@ -200,6 +216,8 @@ void render_replay(mjModel *m,
     glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
 
     mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
+    if (side_light_scene_index >= 0 && side_light_scene_index < scn.nlight)
+      scn.lights[side_light_scene_index].castshadow = 0;
 
     // Render the massless marker cloud after scene construction so it remains
     // visible but cannot distort the ground with a large collective shadow.
@@ -220,9 +238,9 @@ void render_replay(mjModel *m,
     auto draw_grf = [&](const auto &cop, const auto &grf, float *color) {
       if (grf[2] > 1.0 &&
           scn.ngeom < scn.maxgeom) { // Draw if vertical force is meaningful
-        double scale = 0.005;
-        double p2[3] = {cop[0] + grf[0] * scale, cop[1] + grf[1] * scale,
-                        cop[2] + grf[2] * scale};
+        double p2[3] = {cop[0] + grf[0] * kGrfArrowScale,
+                        cop[1] + grf[1] * kGrfArrowScale,
+                        cop[2] + grf[2] * kGrfArrowScale};
         mjv_initGeom(&scn.geoms[scn.ngeom], mjGEOM_ARROW, nullptr, nullptr,
                      nullptr, color);
         mjv_connector(&scn.geoms[scn.ngeom++], mjGEOM_ARROW, 0.015,

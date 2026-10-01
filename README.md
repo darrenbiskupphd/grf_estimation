@@ -23,14 +23,20 @@ cmake --build build --target data_factory --parallel 4
 
 The build pins MuJoCo 3.2.6, GLFW 3.4, and MJPC revision ff572a21e7c2bf9fda62e1862a758da7e9a8719b.
 
+## Nominal models and controller
+
+The selected **O configuration is now the default**, not a separate preset. `assets/` contains only `winter_baseline_male.xml` and `plagenhoef_baseline_female.xml`. Both have bilateral `ankle_x` −12°/+30° and passive `shoulder3` limits of right −60°/+80°, left −80°/+60°; axial stiffness/damping remain 1/0.2 and ankle_x stiffness remains 3. The controller defaults to effort-rate weight 100, elbow position weight 16, hand position 8, elbow reference-velocity weight 0.02, roll 0, QMC 0, and one planner worker.
+
+These are the adopted engineering settings, not validated anatomical ROM or GRF labels. Heel behavior and shoulder soft-limit overruns remain unresolved. Earlier nominal XMLs remain available in Git history; trial XML copies have been removed.
+
 ## Run a tracking episode
 
-Run from the repository root. The output path is explicit; **data/runs/** is ignored by Git and is created when needed.
+Run from the repository root. The output path is explicit; **data/runs/** is ignored by Git and is created when needed. No wrapper or tuning flags are required for the default controller.
 
 ~~~bash
 ./build/data_factory run \
   --model assets/winter_baseline_male.xml \
-  --motion walk --duration 8 \
+  --motion walk \
   --qmc-index 0 \
   --output data/runs/male_walk_raw.grf
 ~~~
@@ -40,7 +46,7 @@ Use --render to show the recorded replay immediately after the run:
 ~~~bash
 ./build/data_factory run \
   --model assets/plagenhoef_baseline_female.xml \
-  --motion walk --duration 8 \
+  --motion walk \
   --output data/runs/female_walk_raw.grf \
   --render
 ~~~
@@ -55,13 +61,19 @@ The tracker copies the ordered 16 source points exactly, including for nonzero Q
 
 One episode index avoids two coupled command-line knobs while keeping morphology and marker placement in distinct QMC dimensions. Marker sites change no contact, inertia, or controller parameter. For example, use `--qmc-index 2` for a reproducible non-nominal visual test.
 
+`--effort-rate-weight <value>` controls the activation-rate penalty and defaults to **`100`**. Set it to `0` to disable the term. The cost is `0.5 * weight * mean((activation_rate / 20)^2)`, with activation rate in inverse seconds, computed from the existing filtered actuators. This regularizes changes in actuator effort; it does not directly penalize impacts or smooth recorded forces. The weight and definition are saved in the bundle's preparation metadata.
+
+Experimental `--stance-roll-weight <value>` (default `0`) adds a reference-gated lateral foot-roll penalty, with no direct pitch penalty; the gate uses low/slow reference toe and heel markers, not simulated contact. Optional `--stance-roll-still-time <seconds>` (default `0`) requires that low/slow reference condition to persist before the roll cost engages. `--knee-hip-pos-scale <value>` (default `1`) multiplies only knee/hip position-tracking weights. `--elbow-velocity-weight <value>` defaults to `0.02` and changes **only** the existing left/right `Vel[elbow]` reference-tracking weight; it is not a penalty on absolute elbow speed or GRF changes. `--elbow-position-weight` defaults to **`16`** and `--hand-position-weight` to **`8`**; they change only the respective bilateral point-position terms. Shoulder and lower-body weights remain unchanged. These settings are recorded in preparation metadata and leave model physics and raw target trajectories unchanged. Overrides support controlled experiments; no setting implies validated GRF labels.
+
 ## Replay a saved run
 
 ~~~bash
-./build/data_factory replay data/runs/male_walk_raw.grf --speed 0.25
+./build/data_factory replay data/runs/male_walk_raw.grf --speed 1
 ~~~
 
-`--speed` is a positive playback multiplier: `.25` is quarter speed and `1` is real time. Scroll to zoom, left-drag to rotate, right-drag to pan vertically, Shift+right-drag to pan horizontally, and press `F` to toggle root-follow while inspecting a foot.
+`--speed` is a positive playback multiplier: `.25` is quarter speed and `1` is real time. For research replay reviews, use **1× Walk**, **0.5× Jump and Dance**, and **0.25× Kick Spin and Spin Kick**. Report the exact replay command for **every full clip and both sexes**, grouped by controller candidate (all A, then all B, then all C), with a short candidate legend; never make the reviewer infer settings from filenames. Scroll to zoom, left-drag to rotate, right-drag to pan vertically, Shift+right-drag to pan horizontally, and press `F` to toggle root-follow while inspecting a foot.
+
+The replay viewer draws cyan GRF arrows at `0.003 m/N` and leaves only the overhead model light casting a shadow; these display settings do not change saved forces or simulation physics.
 
 Each .grf file is a self-contained binary bundle containing the compiled model, 200 Hz sampled states and targets, force/contact diagnostics, and a JSON summary. New bundles include QMC marker sites; older saved bundles do not gain them retroactively. Replay loads its model from memory and does not replan or write side files. A new QMC bundle shows blue targets, orange tracking sites, red massless markers, and cyan GRF arrows. The red markers are rendered as decorative overlays, so they remain attached to the model without casting a collective ground shadow.
 

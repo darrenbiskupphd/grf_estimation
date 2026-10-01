@@ -1,9 +1,8 @@
 data/
-contexts/
-.vscode/
 build/
 pyrefly.toml
 MUJOCO_LOG.TXT
 .cache/
+.vscode/
 PROJECT_OVERVIEW.md
 IMPLEMENTATION_PLAN.md

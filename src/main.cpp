@@ -37,6 +37,13 @@ void usage(std::ostream &stream) {
       << "  --duration <seconds>          full clip (caps at clip end)\n"
       << "  --qmc-index <index>           0 (nominal body, canonical markers)\n"
       << "  --threads <count>             1\n"
+      << "  --effort-rate-weight <value>  100 (activation-rate cost; 0 disables)\n"
+      << "  --stance-roll-weight <value> 0 (reference-gated lateral foot roll)\n"
+      << "  --stance-roll-still-time <s> 0 (prior low/slow reference duration)\n"
+      << "  --knee-hip-pos-scale <value> 1 (experimental knee/hip position weights)\n"
+      << "  --elbow-velocity-weight <v>  0.02 (reference elbow-velocity tracking)\n"
+      << "  --elbow-position-weight <v>  16 (both elbow position targets)\n"
+      << "  --hand-position-weight <v>   8 (both hand position targets)\n"
       << "  --render                      render the saved in-memory replay\n\n"
       << "Replay options:\n"
       << "  --speed <multiplier>          1 (for example .25 for quarter speed)\n";
@@ -69,6 +76,34 @@ int run(int argc, char **argv) {
       config.planner_threads = integer(argv[++i]);
       if (config.planner_threads < 1)
         throw std::runtime_error("--threads must be positive");
+    } else if (arg == "--effort-rate-weight" && i + 1 < argc) {
+      prepare.effort_rate_weight = number(argv[++i]);
+      if (prepare.effort_rate_weight < 0)
+        throw std::runtime_error("--effort-rate-weight must be nonnegative");
+    } else if (arg == "--stance-roll-weight" && i + 1 < argc) {
+      prepare.stance_roll_weight = number(argv[++i]);
+      if (prepare.stance_roll_weight < 0)
+        throw std::runtime_error("--stance-roll-weight must be nonnegative");
+    } else if (arg == "--stance-roll-still-time" && i + 1 < argc) {
+      prepare.stance_roll_still_time_s = number(argv[++i]);
+      if (prepare.stance_roll_still_time_s < 0)
+        throw std::runtime_error("--stance-roll-still-time must be nonnegative");
+    } else if (arg == "--knee-hip-pos-scale" && i + 1 < argc) {
+      prepare.knee_hip_position_scale = number(argv[++i]);
+      if (prepare.knee_hip_position_scale < 0)
+        throw std::runtime_error("--knee-hip-pos-scale must be nonnegative");
+    } else if (arg == "--elbow-velocity-weight" && i + 1 < argc) {
+      prepare.elbow_velocity_weight = number(argv[++i]);
+      if (prepare.elbow_velocity_weight < 0)
+        throw std::runtime_error("--elbow-velocity-weight must be nonnegative");
+    } else if (arg == "--elbow-position-weight" && i + 1 < argc) {
+      prepare.elbow_position_weight = number(argv[++i]);
+      if (prepare.elbow_position_weight < 0)
+        throw std::runtime_error("--elbow-position-weight must be nonnegative");
+    } else if (arg == "--hand-position-weight" && i + 1 < argc) {
+      prepare.hand_position_weight = number(argv[++i]);
+      if (prepare.hand_position_weight < 0)
+        throw std::runtime_error("--hand-position-weight must be nonnegative");
     } else if (arg == "--render") {
       config.render = true;
     } else if (arg == "--help") {
