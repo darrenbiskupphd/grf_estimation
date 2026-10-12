@@ -47,8 +47,23 @@ struct ReplayFrame {
   std::vector<double> mocap_pos;
   std::vector<double> mocap_quat;
 
-  // Force exerted by the floor on each foot in world axes, and its
-  // vertical-force-weighted contact-position proxy in world coordinates.
+  // V2: synchronized executed observations, separate from mocap references.
+  // Marker order is audit/site order here; export anonymizes it per trajectory.
+  std::vector<double> markers_m;
+  std::vector<double> tracking_positions_m;
+  long long physics_step = 0;
+  bool wrench_available = false; // false only for legacy V1 bundles
+  std::array<double, 3> moment_origin_left{};
+  std::array<double, 3> moment_origin_right{};
+  std::array<double, 3> contact_proxy_left{};
+  std::array<double, 3> contact_proxy_right{};
+  double torque_z_left = 0;
+  double torque_z_right = 0;
+  bool cop_defined_left = false;
+  bool cop_defined_right = false;
+
+  // Floor-on-foot force in world axes; V2 CoP is on Z=0 (NaN if undefined).
+  // V1 cop_* remains the original contact-position proxy, never a valid label.
   std::array<double, 3> grf_left{};
   std::array<double, 3> grf_right{};
   std::array<double, 3> cop_left{};

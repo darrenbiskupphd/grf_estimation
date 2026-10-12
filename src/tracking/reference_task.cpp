@@ -50,16 +50,49 @@ double controller_weight(const std::string &name, double baseline_weight,
   return baseline_weight;
 }
 
-struct Interpolation {
-  int first, next;
-  double fraction;
+// Frozen from MJPC humanoid/tracking/task.xml at revision
+// ff572a21e7c2bf9fda62e1862a758da7e9a8719b (Apache-2.0, DeepMind).
+// Only objective/planner configuration is retained, not model physics, source
+// poses, keyframe names, or motion-selection text. controller_weight applies
+// the same O overrides as before; the norm definitions and order are unchanged.
+struct PlannerNumeric {
+  const char *name;
+  double value;
 };
-Interpolation interpolate(const mjModel *model, double time) {
-  const double index =
-      std::clamp(time * kReferenceFps, 0.0, double(model->nkey - 1));
-  const int first = static_cast<int>(std::floor(index));
-  return {first, std::min(first + 1, model->nkey - 1), index - first};
-}
+constexpr PlannerNumeric kPlannerNumerics[] = {
+    {"sampling_representation", 2}, {"agent_planner", 2},
+    {"agent_horizon", 0.5}, {"agent_timestep", 0.005},
+    {"sampling_spline_points", 16}, {"sampling_exploration", 0.15},
+    {"sampling_trajectories", 32}, {"gradient_spline_points", 5},
+    {"ilqg_num_rollouts", 16}, {"ilqg_regularization_type", 1},
+    {"ilqg_representation", 2}};
+struct CostSensor {
+  const char *name;
+  int dimension;
+  std::array<double, 6> userdata;
+};
+constexpr CostSensor kCostSensors[] = {
+    {"Joint Vel.", 0, {0, 0.001, 0, 0.01, 0, 0}},
+    {"Control", 0, {3, 0.1, 0, 1, 0.3, 0}},
+    {"Pos[avg]", 3, {6, 100, 0, 100, 0.1, 0}},
+    {"Pos[pelvis]", 3, {6, 30, 0, 100, 0.1, 0}},
+    {"Pos[head]", 3, {6, 0, 0, 100, 0.1, 0}},
+    {"Pos[toe]", 6, {7, 30, 0, 100, 0.2, 4}},
+    {"Pos[heel]", 6, {7, 30, 0, 100, 0.2, 4}},
+    {"Pos[knee]", 6, {6, 30, 0, 100, 0.1, 0}},
+    {"Pos[hand]", 6, {6, 30, 0, 100, 0.1, 0}},
+    {"Pos[elbow]", 6, {7, 30, 0, 100, 0.2, 4}},
+    {"Pos[shoulder]", 6, {6, 30, 0, 100, 0.1, 0}},
+    {"Pos[hip]", 6, {6, 30, 0, 100, 0.1, 0}},
+    {"Vel[root]", 3, {6, 0.1, 0, 1, 0.3, 0}},
+    {"Vel[head]", 3, {6, 0, 0, 1, 0.3, 0}},
+    {"Vel[toe]", 6, {6, 0.1, 0, 1, 0.3, 0}},
+    {"Vel[heel]", 6, {6, 0.1, 0, 1, 0.3, 0}},
+    {"Vel[knee]", 6, {6, 0.1, 0, 1, 0.3, 0}},
+    {"Vel[hand]", 6, {6, 0.1, 0, 1, 0.3, 0}},
+    {"Vel[elbow]", 6, {6, 0.1, 0, 1, 0.3, 0}},
+    {"Vel[shoulder]", 6, {6, 0.1, 0, 1, 0.3, 0}},
+    {"Vel[hip]", 6, {6, 0.1, 0, 1, 0.3, 0}}};
 
 double low_score(double value, double full, double off) {
   const double fraction = std::clamp((value - full) / (off - full), 0.0, 1.0);
@@ -67,8 +100,7 @@ double low_score(double value, double full, double off) {
 }
 } // namespace
 
-void add_reference_tracking_objective(mjSpec *spec, const mjModel *source,
-                                      const mjModel *baseline,
+void add_reference_tracking_objective(mjSpec *spec, const mjModel *baseline,
                                       double effort_rate_weight,
                                       double stance_roll_weight,
                                       double knee_hip_position_scale,
@@ -98,11 +130,10 @@ void add_reference_tracking_objective(mjSpec *spec, const mjModel *source,
   clear_elements(spec, mjOBJ_NUMERIC);
   clear_elements(spec, mjOBJ_TEXT);
   clear_elements(spec, mjOBJ_KEY);
-  for (int i = 0; i < source->nnumeric; ++i) {
+  for (const auto &setting : kPlannerNumerics) {
     auto *numeric = mjs_addNumeric(spec);
-    mjs_setString(numeric->name, mj_id2name(source, mjOBJ_NUMERIC, i));
-    mjs_setDouble(numeric->data, source->numeric_data + source->numeric_adr[i],
-                  source->numeric_size[i]);
+    mjs_setString(numeric->name, setting.name);
+    mjs_setDouble(numeric->data, &setting.value, 1);
   }
   // Omit the extra numeric at zero so existing objective/model layout is kept.
   if (stance_roll_weight > 0 && stance_roll_still_time_s > 0) {
@@ -111,26 +142,20 @@ void add_reference_tracking_objective(mjSpec *spec, const mjModel *source,
     mjs_setDouble(numeric->data, &stance_roll_still_time_s, 1);
   }
   // Adjust the stock layout for the custom model's four passive DOFs.
-  for (int i = 0; i < source->nsensor; ++i) {
-    if (source->sensor_type[i] != mjSENS_USER)
-      continue;
+  for (const auto &cost : kCostSensors) {
     auto *sensor = mjs_addSensor(spec);
-    const std::string name = mj_id2name(source, mjOBJ_SENSOR, i);
-    mjs_setString(sensor->name, name.c_str());
+    const std::string name = cost.name;
+    mjs_setString(sensor->name, cost.name);
     sensor->type = mjSENS_USER;
     sensor->needstage = mjSTAGE_ACC;
     sensor->datatype = mjDATATYPE_REAL;
     sensor->dim = name == "Joint Vel." ? baseline->nv - 6
                   : name == "Control"  ? baseline->nu
-                                       : source->sensor_dim[i];
-    std::vector<double> userdata(source->sensor_user + i * source->nuser_sensor,
-                                 source->sensor_user +
-                                     (i + 1) * source->nuser_sensor);
-    if (userdata.size() > 1)
-      userdata[1] =
-          controller_weight(name, userdata[1], knee_hip_position_scale,
-                            elbow_velocity_weight, elbow_position_weight,
-                            hand_position_weight);
+                                       : cost.dimension;
+    auto userdata = cost.userdata;
+    userdata[1] = controller_weight(name, userdata[1], knee_hip_position_scale,
+                                    elbow_velocity_weight,
+                                    elbow_position_weight, hand_position_weight);
     mjs_setDouble(sensor->userdata, userdata.data(), userdata.size());
   }
   // All cost sensors must precede the physical sensors. Omit the term at
@@ -205,6 +230,9 @@ void ReferenceTask::ResetLocked(const mjModel *model) {
         model->sensor_dim[roll_sensor] != 2)))
     throw std::runtime_error(
         "Reference tracking requires a free root and a 16-target clip");
+  validate_reference_times(model->key_time, model->nkey);
+  if (model->key_time[0] != 0)
+    throw std::runtime_error("Reference key times must start at normalized zero");
   for (size_t i = 0; i < kTargets.size(); ++i) {
     const std::string name = kTargets[i];
     residual_.positions[i] = model->sensor_adr[require_id(
@@ -243,8 +271,8 @@ void ReferenceTask::ResetLocked(const mjModel *model) {
           const double height = point(key, target, 2) - minimum_height[target];
           const double dx = point(next, target, 0) - point(previous, target, 0);
           const double dy = point(next, target, 1) - point(previous, target, 1);
-          const double speed =
-              std::hypot(dx, dy) * kReferenceFps / (next - previous);
+          const double speed = std::hypot(dx, dy) /
+                               (model->key_time[next] - model->key_time[previous]);
           gate = std::min(gate,
                           low_score(height, kStanceHeightFull, kStanceHeightOff) *
                               low_score(speed, kStanceSpeedFull, kStanceSpeedOff));
@@ -261,19 +289,17 @@ void ReferenceTask::ResetLocked(const mjModel *model) {
           model->numeric_data[model->numeric_adr[still_numeric]];
       if (!std::isfinite(seconds) || seconds < 0)
         throw std::runtime_error("Invalid stance-roll still time");
-      const double key_count = seconds * kReferenceFps;
-      const int prior_keys = key_count >= model->nkey
-                                 ? model->nkey
-                                 : static_cast<int>(std::ceil(key_count - 1e-9));
       const auto instantaneous_gate = residual_.stance_gate;
       for (int key = 0; key < model->nkey; ++key) {
+        const auto first = reference_history_start(model->key_time, model->nkey,
+                                                   key, seconds);
         for (int side = 0; side < 2; ++side) {
-          if (key < prior_keys) {
+          if (!first) {
             residual_.stance_gate[key][side] = 0;
             continue;
           }
           double sustained = 1;
-          for (int earlier = key - prior_keys; earlier <= key; ++earlier)
+          for (std::size_t earlier = *first; earlier <= std::size_t(key); ++earlier)
             sustained = std::min(sustained, instantaneous_gate[earlier][side]);
           residual_.stance_gate[key][side] = sustained;
         }
@@ -283,18 +309,20 @@ void ReferenceTask::ResetLocked(const mjModel *model) {
 }
 
 void ReferenceTask::TransitionLocked(mjModel *model, mjData *data) {
-  const auto sample = interpolate(model, data->time);
+  const auto sample =
+      reference_interpolation(model->key_time, model->nkey, data->time);
   const int width = 3 * model->nmocap;
   for (int i = 0; i < width; ++i)
-    data->mocap_pos[i] =
-        (1 - sample.fraction) * model->key_mpos[width * sample.first + i] +
-        sample.fraction * model->key_mpos[width * sample.next + i];
+    data->mocap_pos[i] = sample.position(
+        model->key_mpos[width * sample.first + i],
+        model->key_mpos[width * sample.next + i]);
 }
 
 void ReferenceTask::ResidualFn::Residual(const mjModel *model,
                                          const mjData *data,
                                          double *residual) const {
-  const auto sample = interpolate(model, data->time);
+  const auto sample =
+      reference_interpolation(model->key_time, model->nkey, data->time);
   int offset = model->nv - 6;
   mju_copy(residual, data->qvel + 6, offset);
   mju_copy(residual + offset, data->ctrl, model->nu);
@@ -306,11 +334,11 @@ void ReferenceTask::ResidualFn::Residual(const mjModel *model,
       const int point = 3 * mocap[i] + axis;
       const double p0 = model->key_mpos[width * sample.first + point];
       const double p1 = model->key_mpos[width * sample.next + point];
-      errors[3 * i + axis] = (1 - sample.fraction) * p0 + sample.fraction * p1 -
+      errors[3 * i + axis] = sample.position(p0, p1) -
                              data->sensordata[positions[i] + axis];
       average[axis] += errors[3 * i + axis] / kTargets.size();
       residual[offset + 3 + 48 + 3 * i + axis] =
-          (p1 - p0) * kReferenceFps - data->sensordata[velocities[i] + axis];
+          sample.velocity(p0, p1) - data->sensordata[velocities[i] + axis];
     }
   }
   mju_copy3(residual + offset, average);

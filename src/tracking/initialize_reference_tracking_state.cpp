@@ -8,7 +8,7 @@
 
 namespace tracking {
 namespace {
-using Points = std::array<double, 48>;
+using Points = ReferencePoints;
 
 std::array<int, 16> tracking_sites(const mjModel *model) {
   std::array<int, 16> ids;
@@ -37,9 +37,33 @@ double lowest_foot(const mjModel *model, const mjData *data) {
   return height;
 }
 
+// Align the neutral model's shoulder axis in the ground plane, then place its
+// pelvis landmark at the reference pelvis. Only the free-root pose is changed.
+void align_root(const mjModel *model, mjData *data, const Points &target,
+                const std::array<int, 16> &sites) {
+  if (model->jnt_type[0] != mjJNT_FREE || model->jnt_qposadr[0] != 0)
+    throw std::runtime_error("Tracking initialization requires a free root");
+  mj_forward(model, data);
+  const double *left = data->site_xpos + 3 * sites[12];
+  const double *right = data->site_xpos + 3 * sites[13];
+  const double x = target[36] - target[39];
+  const double y = target[37] - target[40];
+  if (std::hypot(x, y) > 1e-6) {
+    const double yaw = std::atan2(y, x) -
+                       std::atan2(left[1] - right[1], left[0] - right[0]);
+    const double rotation[4] = {std::cos(yaw / 2), 0, 0, std::sin(yaw / 2)};
+    double result[4];
+    mju_mulQuat(result, rotation, data->qpos + 3);
+    mju_copy(data->qpos + 3, result, 4);
+    mj_forward(model, data);
+  }
+  for (int axis = 0; axis < 3; ++axis)
+    data->qpos[axis] += target[axis] - data->site_xpos[3 * sites[0] + axis];
+}
+
 // Damped least squares in MuJoCo's tangent coordinates, with a bounded step
-// and line search. The caller supplies a fresh custom-model neutral state;
-// this function never consults source joint trajectories.
+// and line search. The caller supplies a seed pose; this function never
+// consults source joint trajectories.
 double fit_pose(const mjModel *model, mjData *data, const Points &target,
                 const std::array<int, 16> &sites) {
   const int n = model->nv;
@@ -134,26 +158,28 @@ initialize_reference_tracking_state(mjModel *model, const Points &first_targets,
                                     const Points &second_targets) {
   if (!model || model->nkey < 2)
     throw std::runtime_error("Tracking initialization requires two keyframes");
+  validate_reference_times(model->key_time, model->nkey);
+  const double interval_s = model->key_time[1] - model->key_time[0];
   const auto sites = tracking_sites(model);
 
-  // Preserve the baseline initialization: both fits start independently from
-  // neutral. Continuity seeding and support constraints are later experiments,
-  // not part of this behavior-preserving split. Target coordinates never
-  // change.
   auto initial = make_data(model);
+  align_root(model, initial.get(), first_targets, sites);
   const double initial_fit_before_lift =
       fit_pose(model, initial.get(), first_targets, sites);
+  // Continue the unconstrained landmark fit, not its later floor correction.
+  auto next = make_data(model);
+  mju_copy(next->qpos, initial->qpos, model->nq);
   const double initial_floor_lift = lift_to_clearance(model, initial.get());
   const double initial_fit =
       site_rmse(model, initial.get(), first_targets, sites);
-  auto next = make_data(model);
   const double second_fit_before_lift =
       fit_pose(model, next.get(), second_targets, sites);
   const double second_floor_lift = lift_to_clearance(model, next.get());
   const double second_fit = site_rmse(model, next.get(), second_targets, sites);
   for (int frame = 0; frame < model->nkey; ++frame)
-    mju_copy(model->key_qpos + model->nq * frame, initial->qpos, model->nq);
-  mj_differentiatePos(model, model->key_qvel, 1 / kReferenceFps, initial->qpos,
+    mju_copy(model->key_qpos + std::size_t(model->nq) * frame, initial->qpos,
+             model->nq);
+  mj_differentiatePos(model, model->key_qvel, interval_s, initial->qpos,
                       next->qpos);
 
   std::array<double, 16> initial_errors{};
@@ -166,7 +192,7 @@ initialize_reference_tracking_state(mjModel *model, const Points &first_targets,
     passive_initial[name] =
         initial->qpos[model->jnt_qposadr[require_id(model, mjOBJ_JOINT, name)]];
 
-  return {{"seed", "custom model neutral qpos only"},
+  return {{"seed", "neutral pose with reference-aligned root; second fit seeded from first"},
           {"initial_fit_rmse_before_floor_lift_m", initial_fit_before_lift},
           {"initial_fit_rmse_m", initial_fit},
           {"initial_site_errors_m", initial_errors},
@@ -175,8 +201,9 @@ initialize_reference_tracking_state(mjModel *model, const Points &first_targets,
           {"second_frame_fit_rmse_before_floor_lift_m", second_fit_before_lift},
           {"second_frame_fit_rmse_m", second_fit},
           {"second_frame_floor_lift_m", second_floor_lift},
-          {"initial_velocity", "finite difference between two neutral-seeded "
-                               "point-only IK fits at 30 Hz"},
+          {"initial_velocity", "finite difference between continuity-seeded "
+                               "point-only IK fits at native timestamps"},
+          {"initial_velocity_interval_s", interval_s},
           {"initial_passive_joint_angles_rad", passive_initial}};
 }
 } // namespace tracking

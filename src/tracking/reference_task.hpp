@@ -12,9 +12,9 @@ inline constexpr double kStanceHeightOff = 0.12;  // m
 inline constexpr double kStanceSpeedFull = 0.05;  // horizontal m/s
 inline constexpr double kStanceSpeedOff = 0.20;   // horizontal m/s
 
-// Install planner settings and cost/sensor layout without changing physics.
-void add_reference_tracking_objective(mjSpec *spec, const mjModel *source,
-                                      const mjModel *baseline,
+// Install the frozen MJPC/O planner and cost/sensor template without loading
+// stock models or bundled motions. Physical model settings are untouched.
+void add_reference_tracking_objective(mjSpec *spec, const mjModel *baseline,
                                       double effort_rate_weight = 100,
                                       double stance_roll_weight = 0,
                                       double knee_hip_position_scale = 1,
@@ -24,7 +24,8 @@ void add_reference_tracking_objective(mjSpec *spec, const mjModel *source,
                                       double hand_position_weight = 8);
 
 // Point tracking with optional activation-rate and reference-gated roll costs;
-// one raw clip and no physical state changes inside Transition.
+// one externally supplied, timestamped clip; no physical state changes inside
+// Transition.
 class ReferenceTask final : public mjpc::Task {
 public:
   ReferenceTask() : residual_(this) {}

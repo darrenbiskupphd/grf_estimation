@@ -1,4 +1,6 @@
 #include "run_bundle.hpp"
+#include "qmc_sampling.hpp"
+#include "contact_wrench.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,7 +19,7 @@
 namespace tracking {
 namespace {
 constexpr std::array<char, 8> kMagic = {'G', 'R', 'F', 'R', 'U', 'N', '1', 0};
-constexpr std::uint32_t kVersion = 1;
+constexpr std::uint32_t kVersion = 2;
 constexpr std::uint64_t kMaxModelBytes = 1ULL << 30;
 constexpr std::uint64_t kMaxSummaryBytes = 64ULL << 20;
 constexpr std::uint64_t kMaxFrames = 10'000'000;
@@ -119,8 +121,44 @@ void validate_frame(const ReplayFrame &frame, const mjModel *model,
   require_finite(frame.mocap_quat, 4 * model->nmocap, "mocap quaternion");
   require_finite(frame.grf_left.data(), frame.grf_left.size(), "left GRF");
   require_finite(frame.grf_right.data(), frame.grf_right.size(), "right GRF");
-  require_finite(frame.cop_left.data(), frame.cop_left.size(), "left CoP");
-  require_finite(frame.cop_right.data(), frame.cop_right.size(), "right CoP");
+  if (frame.wrench_available) {
+    require_finite(frame.markers_m, 3 * qmc_marker_site_ids(model).size(), "executed markers");
+    require_finite(frame.tracking_positions_m, 48, "executed tracking sites");
+    require_finite(frame.moment_origin_left.data(), 3, "left moment");
+    require_finite(frame.moment_origin_right.data(), 3, "right moment");
+    require_finite(frame.contact_proxy_left.data(), 3, "left contact proxy");
+    require_finite(frame.contact_proxy_right.data(), 3, "right contact proxy");
+    if (frame.physics_step < 0)
+      throw std::runtime_error("Negative physics step in bundle");
+    for (int side = 0; side < 2; ++side) {
+      const auto &cop = side == 0 ? frame.cop_left : frame.cop_right;
+      const double torque = side == 0 ? frame.torque_z_left : frame.torque_z_right;
+      const bool defined = side == 0 ? frame.cop_defined_left : frame.cop_defined_right;
+      const ContactWrench wrench{
+          side == 0 ? frame.grf_left : frame.grf_right,
+          side == 0 ? frame.moment_origin_left : frame.moment_origin_right};
+      const auto expected = plane_contact(wrench);
+      if (defined != expected.defined)
+        throw std::runtime_error("CoP mask inconsistent with raw wrench");
+      if (defined) {
+        require_finite(cop.data(), 3, "defined CoP");
+        if (cop[2] != 0 || !std::isfinite(torque))
+          throw std::runtime_error("Invalid plane CoP/free moment");
+        const auto matches = [](double a, double b) {
+          return std::abs(a - b) <= 1e-12 * std::max({1.0, std::abs(a), std::abs(b)});
+        };
+        if (!matches(cop[0], expected.cop[0]) || !matches(cop[1], expected.cop[1]) ||
+            !matches(torque, expected.free_moment_z))
+          throw std::runtime_error("CoP/free moment inconsistent with raw wrench");
+      } else if (!std::all_of(cop.begin(), cop.end(), [](double x) { return std::isnan(x); }) ||
+                 !std::isnan(torque)) {
+        throw std::runtime_error("Undefined CoP/free moment must be NaN");
+      }
+    }
+  } else {
+    require_finite(frame.cop_left.data(), 3, "legacy left contact proxy");
+    require_finite(frame.cop_right.data(), 3, "legacy right contact proxy");
+  }
   require_finite(frame.left_contact.geom_normal_load.data(),
                  frame.left_contact.geom_normal_load.size(),
                  "left per-geometry contact load");
@@ -221,6 +259,8 @@ void save_run_bundle(const std::filesystem::path &path, const mjModel *model,
 
   double previous_time = -std::numeric_limits<double>::infinity();
   for (const auto &frame : frames) {
+    if (!frame.wrench_available)
+      throw std::runtime_error("Cannot write legacy proxy contacts as V2 labels");
     validate_frame(frame, model, previous_time);
     previous_time = frame.time;
   }
@@ -237,6 +277,7 @@ void save_run_bundle(const std::filesystem::path &path, const mjModel *model,
   for (const int dimension :
        {model->nq, model->nv, model->na, model->nu, model->nmocap})
     write_value(stream, static_cast<std::uint32_t>(dimension));
+  write_value(stream, static_cast<std::uint32_t>(qmc_marker_site_ids(model).size()));
   stream.write(model_bytes.data(), static_cast<std::streamsize>(model_bytes.size()));
   stream.write(summary_text.data(), static_cast<std::streamsize>(summary_text.size()));
   for (const auto &frame : frames) {
@@ -253,6 +294,17 @@ void save_run_bundle(const std::filesystem::path &path, const mjModel *model,
     write_doubles(stream, frame.cop_right.data(), frame.cop_right.size());
     write_foot(stream, frame.left_contact);
     write_foot(stream, frame.right_contact);
+    write_value(stream, static_cast<std::uint64_t>(frame.physics_step));
+    write_doubles(stream, frame.markers_m.data(), frame.markers_m.size());
+    write_doubles(stream, frame.tracking_positions_m.data(), frame.tracking_positions_m.size());
+    write_doubles(stream, frame.moment_origin_left.data(), 3);
+    write_doubles(stream, frame.moment_origin_right.data(), 3);
+    write_doubles(stream, frame.contact_proxy_left.data(), 3);
+    write_doubles(stream, frame.contact_proxy_right.data(), 3);
+    write_value(stream, frame.torque_z_left);
+    write_value(stream, frame.torque_z_right);
+    write_value(stream, static_cast<std::uint8_t>(frame.cop_defined_left));
+    write_value(stream, static_cast<std::uint8_t>(frame.cop_defined_right));
   }
   stream.close();
   output.commit();
@@ -266,7 +318,8 @@ RunBundle load_run_bundle(const std::filesystem::path &path) {
   stream.read(magic.data(), static_cast<std::streamsize>(magic.size()));
   if (!stream || magic != kMagic)
     throw std::runtime_error("Not a GRF run bundle");
-  if (read_value<std::uint32_t>(stream) != kVersion)
+  const auto version = read_value<std::uint32_t>(stream);
+  if (version != 1 && version != kVersion)
     throw std::runtime_error("Unsupported GRF run-bundle format version");
   (void)read_value<std::uint32_t>(stream); // Reserved for format flags.
   const auto model_size = read_value<std::uint64_t>(stream);
@@ -275,6 +328,9 @@ RunBundle load_run_bundle(const std::filesystem::path &path) {
   std::array<std::uint32_t, 5> dimensions{};
   for (auto &dimension : dimensions)
     dimension = read_value<std::uint32_t>(stream);
+  const auto marker_count = version >= 2 ? read_value<std::uint32_t>(stream) : 0;
+  if (marker_count > 100000)
+    throw std::runtime_error("Invalid marker count in bundle");
   if (model_size == 0 || model_size > kMaxModelBytes ||
       summary_size > kMaxSummaryBytes || frame_count == 0 ||
       frame_count > kMaxFrames || model_size > static_cast<std::uint64_t>(INT_MAX)) {
@@ -318,6 +374,9 @@ RunBundle load_run_bundle(const std::filesystem::path &path) {
     throw std::runtime_error("Run-bundle model dimensions do not match header");
   }
 
+  if (version >= 2 && marker_count != qmc_marker_site_ids(model).size())
+    throw std::runtime_error("Bundle marker count does not match model");
+  result.summary["bundle_format_version"] = version;
   result.frames.reserve(static_cast<size_t>(frame_count));
   double previous_time = -std::numeric_limits<double>::infinity();
   for (std::uint64_t index = 0; index < frame_count; ++index) {
@@ -341,6 +400,32 @@ RunBundle load_run_bundle(const std::filesystem::path &path) {
     read_doubles(stream, frame.cop_right.data(), frame.cop_right.size());
     frame.left_contact = read_foot(stream);
     frame.right_contact = read_foot(stream);
+    if (version >= 2) {
+      frame.wrench_available = true;
+      const auto step = read_value<std::uint64_t>(stream);
+      if (step > static_cast<std::uint64_t>(std::numeric_limits<long long>::max()))
+        throw std::runtime_error("Invalid physics step in bundle");
+      frame.physics_step = static_cast<long long>(step);
+      frame.markers_m.resize(3 * marker_count);
+      frame.tracking_positions_m.resize(48);
+      read_doubles(stream, frame.markers_m.data(), frame.markers_m.size());
+      read_doubles(stream, frame.tracking_positions_m.data(), 48);
+      read_doubles(stream, frame.moment_origin_left.data(), 3);
+      read_doubles(stream, frame.moment_origin_right.data(), 3);
+      read_doubles(stream, frame.contact_proxy_left.data(), 3);
+      read_doubles(stream, frame.contact_proxy_right.data(), 3);
+      frame.torque_z_left = read_value<double>(stream);
+      frame.torque_z_right = read_value<double>(stream);
+      const auto left = read_value<std::uint8_t>(stream);
+      const auto right = read_value<std::uint8_t>(stream);
+      if (left > 1 || right > 1)
+        throw std::runtime_error("Invalid CoP mask in bundle");
+      frame.cop_defined_left = left;
+      frame.cop_defined_right = right;
+    } else {
+      frame.contact_proxy_left = frame.cop_left;
+      frame.contact_proxy_right = frame.cop_right;
+    }
     validate_frame(frame, model, previous_time);
     previous_time = frame.time;
     result.frames.push_back(std::move(frame));

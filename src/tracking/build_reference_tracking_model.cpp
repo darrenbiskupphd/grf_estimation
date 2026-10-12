@@ -8,7 +8,7 @@
 
 namespace tracking {
 namespace {
-using Points = std::array<double, 48>;
+using Points = ReferencePoints;
 
 ModelPtr compile(mjSpec *spec) {
   ModelPtr model(mj_compile(spec, nullptr), mj_deleteModel);
@@ -94,18 +94,9 @@ std::array<int, 16> target_mocap_ids(const mjModel *model) {
   return ids;
 }
 
-Points source_targets(const mjModel *source, int key,
-                      const std::array<int, 16> &mocap) {
-  Points points{};
-  const double *values = source->key_mpos + 3 * source->nmocap * key;
-  for (int i = 0; i < 16; ++i)
-    mju_copy3(points.data() + 3 * i, values + 3 * mocap[i]);
-  return points;
-}
-
 void write_targets(mjModel *model, int key, const Points &points,
                    const std::array<int, 16> &mocap) {
-  double *values = model->key_mpos + 3 * model->nmocap * key;
+  double *values = model->key_mpos + 3 * std::size_t(model->nmocap) * key;
   for (int i = 0; i < 16; ++i)
     mju_copy3(values + 3 * mocap[i], points.data() + 3 * i);
 }
@@ -148,28 +139,16 @@ void verify_dynamics(const mjModel *baseline, const mjModel *model) {
 
 Prepared build_reference_tracking_model(const std::string &model_path,
                                         const PrepareConfig &config) {
-  if (config.qmc_index < 0)
-    throw std::runtime_error("QMC index must be nonnegative");
-  if (config.motion == "run")
+  if (config.qmc_index < 0 || config.layout_index < 0)
     throw std::runtime_error(
-        "The bundled run clip was retired (39 frames, 1.267 s); sustained "
-        "running needs a replacement reference. Choose " +
-        foot_only_motion_names());
-  if (!is_foot_only_motion(config.motion))
-    throw std::runtime_error(
-        "Motion is not approved for foot-only episodes: " + config.motion +
-        " (choose " + foot_only_motion_names() + ")");
+        "QMC morphology and marker-layout indices must be nonnegative");
+  // Validate the external data before parsing or modifying the physical model.
+  // The MJPC/O objective is installed separately; no bundled motion is loaded.
+  const ReferenceData reference = load_reference(config.reference_path);
+  const int frame_count = static_cast<int>(reference.time_s.size());
+  const std::string reference_id = reference.source_id;
 
   char error[2048] = {};
-  ModelPtr source(mj_loadXML(GRF_TRACKING_MODEL, nullptr, error, sizeof(error)),
-                  mj_deleteModel);
-  if (!source)
-    throw std::runtime_error(std::string("Could not load reference clips: ") +
-                             error);
-  const Clip source_clip = find_clip(source.get(), config.motion);
-  const int source_first = source_clip.first;
-  const int frame_count = source_clip.count;
-
   SpecPtr spec(mj_parseXML(model_path.c_str(), nullptr, error, sizeof(error)),
                mj_deleteSpec);
   if (!spec)
@@ -179,7 +158,7 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       apply_morphology_qmc(spec.get(), config.qmc_index);
   auto baseline = compile(spec.get());
   add_tracking_sites(spec.get(), baseline.get());
-  add_reference_tracking_objective(spec.get(), source.get(), baseline.get(),
+  add_reference_tracking_objective(spec.get(), baseline.get(),
                                     config.effort_rate_weight,
                                     config.stance_roll_weight,
                                     config.knee_hip_position_scale,
@@ -192,38 +171,39 @@ Prepared build_reference_tracking_model(const std::string &model_path,
   for (int frame = 0; frame < frame_count; ++frame) {
     auto *key = mjs_addKey(spec.get());
     mjs_setString(key->name,
-                  (config.motion + "_" + std::to_string(frame)).c_str());
-    key->time = frame / kReferenceFps;
+                  ("reference_" + std::to_string(frame)).c_str());
+    key->time = reference.time_s[frame];
   }
 
   Prepared prepared;
   prepared.model = compile(spec.get());
   auto *model = prepared.model.get();
   verify_dynamics(baseline.get(), model);
-  place_qmc_marker_sites(model, config.qmc_index);
+  place_qmc_marker_sites(model, config.layout_index);
   const auto destination_mocap = target_mocap_ids(model);
-  const auto source_mocap = target_mocap_ids(source.get());
 
   // The runtime intentionally transfers the source point coordinates exactly:
   // no rigid alignment, scaling, or source joint trajectory is applied.
   for (int frame = 0; frame < frame_count; ++frame)
-    write_targets(model, frame,
-                  source_targets(source.get(), source_first + frame, source_mocap),
-                  destination_mocap);
+    write_targets(model, frame, reference.positions_m[frame], destination_mocap);
 
   const auto initialization = initialize_reference_tracking_state(
-      model, source_targets(source.get(), source_first, source_mocap),
-      source_targets(source.get(), source_first + 1, source_mocap));
+      model, reference.positions_m[0], reference.positions_m[1]);
 
   prepared.source = std::filesystem::absolute(model_path).string();
   prepared.label = "Custom tracking model: " +
                    std::filesystem::path(model_path).filename().string() +
-                   " / qmc " + std::to_string(config.qmc_index);
-  prepared.clip = {0, frame_count};
+                   " / qmc " + std::to_string(config.qmc_index) +
+                   " / layout " + std::to_string(config.layout_index) +
+                   " / " + (config.motion.empty() ? reference_id : config.motion);
+  prepared.reference_id = reference_id;
+  prepared.clip = {0, frame_count, reference.duration_s()};
   prepared.task = std::make_shared<ReferenceTask>();
   prepared.metadata = {
       {"model_kind", "custom_tracking"},
       {"geometry_randomized", config.qmc_index != 0},
+      {"morphology_index", config.qmc_index},
+      {"layout_index", config.layout_index},
       {"tracking_preparation_preserves_morphed_physics", true},
       {"qmc",
        {{"index", config.qmc_index},
@@ -234,9 +214,13 @@ Prepared build_reference_tracking_model(const std::string &model_path,
           {"sampler", "global length/radius Halton sampler; experimental and "
                       "not population-calibrated"}}},
         {"markers",
-         {{"sequence_bases", {5, 7, 11}},
+         {{"layout_index", config.layout_index},
+          {"algorithm", kQmcMarkerLayoutAlgorithm},
+          {"sequence_bases", {5, 7, 11}},
           {"marker_site_count", marker_site_count},
-          {"markers_per_eligible_body", kMarkersPerEligibleBody},
+          {"markers_per_eligible_group", kMarkersPerEligibleGroup},
+          {"foot_group", "main foot and articulated toes share one budget"},
+          {"coverage", "complete primitive surface area; reject buried points at qpos0; hands excluded"},
           {"site_group", 3},
           {"affects_physics", false}}}}},
       {"total_mass_kg", mj_getTotalmass(model)},
@@ -244,10 +228,19 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       {"nv", model->nv},
       {"nu", model->nu},
       {"na", model->na},
-      {"reference_source", GRF_TRACKING_MODEL},
-      {"source_first_key", source_first},
+      {"reference_source", reference.source_path.string()},
+      {"reference_id", reference_id},
+      {"reference_schema_version", 1},
       {"reference_frames", frame_count},
-      {"reference_fps", kReferenceFps},
+      {"reference_duration_s", reference.duration_s()},
+      {"reference_time_s", reference.time_s},
+      {"reference_time_origin_s", reference.time_origin_s},
+      {"reference_metadata", reference.metadata},
+      {"reference_coordinates_modified", false},
+      {"reference_interpolation", "native timestamp piecewise linear; right-"
+                                  "segment velocity; zero velocity at/after end"},
+      {"controller_template", "frozen MJPC humanoid tracking objective with O "
+                              "overrides; no bundled reference data"},
       {"target_order", kTargets},
       {"initialization", initialization},
       {"training_labels_validated", false}};

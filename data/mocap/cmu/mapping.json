@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "description": "CMU C3D surface-marker mapping to 16 tracking landmarks.",
+  "label_prefix": "liu:",
+  "expected_units": "mm",
+  "source_axes": {
+    "description": "CMU C3D right-handed laboratory XYZ with +Z vertical.",
+    "evidence": [
+      "07_01.c3d POINT:X_SCREEN=+X, POINT:Y_SCREEN=+Z; screen orientation is supporting evidence, not a floor calibration.",
+      "07_01.c3d foot-marker Z is near 0 mm and head-marker Z is approximately 1515-1678 mm. Inspect the preview before accepting the convention."
+    ]
+  },
+  "world_from_source_m": {
+    "rotation": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    "translation_m": [0, 0, 0],
+    "ground_assumption": "Use laboratory Z=0 with no additional translation. Surface-marker heights are not sole-contact measurements.",
+    "evidence": [
+      "No independent floor calibration was supplied with 07_01.c3d. POINT:Y_SCREEN=+Z does not establish the floor origin.",
+      "Identity transform is deliberate so the preview exposes floor mismatch instead of concealing it with an automatic lift."
+    ]
+  },
+  "limitations": [
+    "CMU files contain labeled reconstructed marker trajectories and may already be processed; do not call every sample raw camera data. CMU warns that other C3Ds can include synthetic BodyBuilder model outputs. This mapping uses only documented capture-marker labels.",
+    "CMU warns lower-numbered subjects are early sessions that may be lower quality. Its standard marker-placement guide/images are not a trial-specific calibration or proof of historical placement for subject 07.",
+    "Pelvis is a four-waist-marker centroid; head is a four-head-marker centroid. Neither is a measured center or a calibrated equivalent of the model's tracking site.",
+    "lhip/rhip are explicitly LFWT/RFWT anterior waist surface proxies. The capture marker set does not provide validated hip joint centers or model-equivalent lateral hip sites. No regression joint-center estimator is applied.",
+    "Knee/elbow/shoulder markers are external landmarks, not joint centers. The lhand/rhand targets are wrist-marker midpoints, not measured wrist joint centers. Toe/heel markers are surface markers, not sole contact points.",
+    "Some 07_01 left-toe surface-marker samples lie below Z=0; coordinates are retained.",
+    "No resampling, gap filling, trimming, smoothing, gait phase alignment, per-body scaling or force estimation is performed. Full native timing is retained."
+  ],
+  "targets": {
+    "pelvis": {
+      "kind": "weighted_mean",
+      "labels": ["LFWT", "RFWT", "LBWT", "RBWT"],
+      "weights": [0.25, 0.25, 0.25, 0.25],
+      "anatomical_meaning": "Explicit centroid of the four anterior/posterior waist surface markers.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Pelvis / Back Waist)", "http://mocap.cs.cmu.edu/marker_images/frontmarkers1000.png"],
+      "limitations": ["Derived geometric centroid; not pelvis COM, a joint center, or a calibrated equivalent of tracking[pelvis]."]
+    },
+    "head": {
+      "kind": "weighted_mean",
+      "labels": ["LFHD", "RFHD", "LBHD", "RBHD"],
+      "weights": [0.25, 0.25, 0.25, 0.25],
+      "anatomical_meaning": "Explicit centroid of all four front/back head-band surface markers.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Head and Wrist)", "http://mocap.cs.cmu.edu/marker_images/frontmarkers1000.png"],
+      "limitations": ["Geometric marker centroid, not a measured anatomical head center; not calibrated to the model's anterior-head site."]
+    },
+    "ltoe": {
+      "kind": "marker", "label": "LTOE",
+      "anatomical_meaning": "Left forefoot surface marker on the bone just before the toe starts.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Foot)", "http://mocap.cs.cmu.edu/marker_images/footmarkers1000.png"],
+      "limitations": ["Not toe tip, MTP joint center, or sole contact point. Some 07_01 samples are below the proposed Z=0 plane."]
+    },
+    "rtoe": {
+      "kind": "marker", "label": "RTOE",
+      "anatomical_meaning": "Right forefoot surface marker on the bone just before the toe starts.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Foot)"],
+      "limitations": ["Not toe tip, MTP joint center, or sole contact point."]
+    },
+    "lheel": {
+      "kind": "marker", "label": "LHEE",
+      "anatomical_meaning": "Left posterior heel-bone surface marker.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Heel)"],
+      "limitations": ["Not sole contact point; marker radius, shoes and placement are not corrected."]
+    },
+    "rheel": {
+      "kind": "marker", "label": "RHEE",
+      "anatomical_meaning": "Right posterior heel-bone surface marker.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Heel)"],
+      "limitations": ["Not sole contact point; marker radius, shoes and placement are not corrected."]
+    },
+    "lknee": {
+      "kind": "marker", "label": "LKNE",
+      "anatomical_meaning": "Left external knee-region marker, placed above the break between upper and lower leg per CMU guide.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Knee)"],
+      "limitations": ["Not knee joint center. Placement and soft tissue differ from the model's shin-body tracking site."]
+    },
+    "rknee": {
+      "kind": "marker", "label": "RKNE",
+      "anatomical_meaning": "Right external knee-region marker, placed above the break between upper and lower leg per CMU guide.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Knee)"],
+      "limitations": ["Not knee joint center. Placement and soft tissue differ from the model's shin-body tracking site."]
+    },
+    "lhand": {
+      "kind": "weighted_mean",
+      "labels": ["LWRA", "LWRB"],
+      "weights": [0.5, 0.5],
+      "anatomical_meaning": "Explicit midpoint of the left wrist A/B surface markers.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Head and Wrist)"],
+      "limitations": ["Wrist-marker midpoint, not a measured wrist joint center or calibrated equivalent of the model hand-body origin. Target name lhand is retained for runtime compatibility."]
+    },
+    "rhand": {
+      "kind": "weighted_mean",
+      "labels": ["RWRA", "RWRB"],
+      "weights": [0.5, 0.5],
+      "anatomical_meaning": "Explicit midpoint of the right wrist A/B surface markers.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Head and Wrist)"],
+      "limitations": ["Wrist-marker midpoint, not a measured wrist joint center or calibrated equivalent of the model hand-body origin. Target name rhand is retained for runtime compatibility."]
+    },
+    "lelbow": {
+      "kind": "marker", "label": "LELB",
+      "anatomical_meaning": "Left external elbow-region surface marker per CMU placement guide.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Elbow)"],
+      "limitations": ["Not elbow joint center; no joint-center substitution or offset is inferred."]
+    },
+    "relbow": {
+      "kind": "marker", "label": "RELB",
+      "anatomical_meaning": "Right external elbow-region surface marker per CMU placement guide.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Elbow)"],
+      "limitations": ["Not elbow joint center; no joint-center substitution or offset is inferred."]
+    },
+    "lshoulder": {
+      "kind": "marker", "label": "LSHO",
+      "anatomical_meaning": "Left shoulder-bone surface marker per CMU guide.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Shoulders)"],
+      "limitations": ["Not glenohumeral joint center; not anatomically equivalent to the model upper-arm origin."]
+    },
+    "rshoulder": {
+      "kind": "marker", "label": "RSHO",
+      "anatomical_meaning": "Right shoulder-bone surface marker per CMU guide.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Shoulders)"],
+      "limitations": ["Not glenohumeral joint center; not anatomically equivalent to the model upper-arm origin."]
+    },
+    "lhip": {
+      "kind": "marker", "label": "LFWT",
+      "anatomical_meaning": "Left anterior waist/pelvis-bone surface marker used as the lhip landmark.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Pelvis)", "http://mocap.cs.cmu.edu/marker_images/frontmarkers1000.png"],
+      "limitations": ["Surface proxy, not a hip joint center or greater-trochanter measurement."]
+    },
+    "rhip": {
+      "kind": "marker", "label": "RFWT",
+      "anatomical_meaning": "Right anterior waist/pelvis-bone surface marker used as the rhip landmark.",
+      "evidence": ["http://mocap.cs.cmu.edu/markerPlacementGuide.pdf (Pelvis)", "http://mocap.cs.cmu.edu/marker_images/frontmarkers1000.png"],
+      "limitations": ["Surface proxy, not a hip joint center or greater-trochanter measurement."]
+    }
+  }
+}

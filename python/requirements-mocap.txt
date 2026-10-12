@@ -1,0 +1,4 @@
+# Reference import/HTML preview and NumPy export tests; no Python MuJoCo needed.
+# Python >= 3.10. Tests use the standard-library unittest runner.
+numpy>=1.26,<3
+c3d==0.6.0

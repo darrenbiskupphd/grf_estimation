@@ -8,27 +8,15 @@
 
 #include "mjpc/task.h"
 #include "mujoco_raii.hpp"
+#include "reference.hpp"
 
 namespace tracking {
-inline constexpr double kReferenceFps = 30;
-inline constexpr std::array<const char *, 16> kTargets = {
-    "pelvis",    "head",      "ltoe",  "rtoe",  "lheel",  "rheel",
-    "lknee",     "rknee",     "lhand", "rhand", "lelbow", "relbow",
-    "lshoulder", "rshoulder", "lhip",  "rhip"};
-
-// Approved bundled clips with foot-only support. The 39-frame run clip is
-// retired; hand- and knee-supported acrobatics are also excluded.
-inline constexpr std::array<const char *, 5> kFootOnlyMotions = {
-    "walk", "jump", "dance", "kick_spin", "spin_kick"};
-
 struct Clip {
   int first = -1;
   int count = 0;
-  double duration() const { return (count - 1) / kReferenceFps; }
+  double duration_s = 0; // Last minus first native reference timestamp.
+  double duration() const { return duration_s; }
 };
-Clip find_clip(const mjModel *model, const std::string &motion);
-bool is_foot_only_motion(const std::string &motion);
-std::string foot_only_motion_names();
 int require_id(const mjModel *model, mjtObj type, const std::string &name);
 
 struct ResolvedDuration {
@@ -39,8 +27,10 @@ struct ResolvedDuration {
 ResolvedDuration resolve_duration(const Clip &clip, double requested_duration);
 
 struct PrepareConfig {
-  std::string motion = "walk";
+  std::filesystem::path reference_path; // Required schema-v1 external JSON.
+  std::string motion; // Optional display/keyframe id; defaults to reference id.
   int qmc_index = 0;
+  int layout_index = 0; // Independent observation-marker layout.
   double effort_rate_weight = 100; // O default; zero disables the rate cost.
   double stance_roll_weight = 0; // Experimental; zero preserves the objective.
   double stance_roll_still_time_s = 0; // Require sustained reference stance.
@@ -51,13 +41,13 @@ struct PrepareConfig {
 };
 
 struct RunConfig {
-  std::string motion = "walk";
+  std::string motion;
   double duration = 0;         // Zero selects the full, non-looping clip.
   double physics_timestep = 1.0 / 2400.0;
   int plan_every_n_steps = 36;
   int planner_threads = 1;
   int warmup_iterations = 2;
-  int replay_every_n_steps = 12;
+  int replay_every_n_steps = 4; // Capture 600 Hz; viewer uses frame timestamps.
   std::filesystem::path output_path;
   bool render = false;
 };
@@ -68,6 +58,7 @@ struct Prepared {
   Clip clip;
   std::string source;
   std::string label;
+  std::string reference_id; // Set RunConfig.motion to this for run reporting.
   nlohmann::json metadata = nlohmann::json::object();
 };
 
@@ -75,8 +66,9 @@ void run(Prepared prepared, const RunConfig &config);
 Prepared build_reference_tracking_model(const std::string &model_path,
                                         const PrepareConfig &config);
 
-// Set initial physical key states from two raw reference samples and return
-// diagnostics. This never modifies the reference coordinates or model physics.
+// Set initial physical key states from the first two raw reference samples,
+// using model->key_time[1] - model->key_time[0] for the velocity difference.
+// This never modifies the reference coordinates or model physics.
 nlohmann::json initialize_reference_tracking_state(
     mjModel *model, const std::array<double, 48> &first_targets,
     const std::array<double, 48> &second_targets);

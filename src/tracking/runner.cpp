@@ -16,6 +16,9 @@
 #include "mujoco_raii.hpp"
 #include "residual_callback.hpp"
 #include "run_bundle.hpp"
+#include "contact_wrench.hpp"
+#include "qmc_sampling.hpp"
+#include "timing.hpp"
 #include "viewer.hpp"
 
 namespace tracking {
@@ -25,39 +28,6 @@ constexpr double kContactThreshold = 1.0;
 constexpr double kJointLimitTolerance = 1e-3;
 constexpr double kForefootBoundaryM = .02;
 constexpr double kLateralEdgeBoundaryM = .03;
-
-Clip find_clip(const mjModel *model, const std::string &motion) {
-  Clip clip;
-  const std::string prefix = motion + "_";
-  for (int key = 0; key < model->nkey; ++key) {
-    const char *name = mj_id2name(model, mjOBJ_KEY, key);
-    if (name && std::string(name).rfind(prefix, 0) == 0) {
-      if (clip.first < 0)
-        clip.first = key;
-      if (key != clip.first + clip.count)
-        throw std::runtime_error("Non-contiguous motion keyframes");
-      ++clip.count;
-    }
-  }
-  if (clip.count < 2)
-    throw std::runtime_error("Reference clip not found: " + motion);
-  return clip;
-}
-
-bool is_foot_only_motion(const std::string &motion) {
-  return std::any_of(kFootOnlyMotions.begin(), kFootOnlyMotions.end(),
-                     [&motion](const char *name) { return motion == name; });
-}
-
-std::string foot_only_motion_names() {
-  std::string names;
-  for (const char *motion : kFootOnlyMotions) {
-    if (!names.empty())
-      names += "|";
-    names += motion;
-  }
-  return names;
-}
 
 ResolvedDuration resolve_duration(const Clip &clip, double requested_duration) {
   if (clip.count < 2 || !std::isfinite(requested_duration) ||
@@ -104,6 +74,13 @@ public:
   explicit Measurements(const mjModel *model)
       : scratch_(make_data(model)), jacobian_(3 * model->nv),
         floor_(require_id(model, mjOBJ_GEOM, "floor")) {
+    double floor_rotation[9];
+    mju_quat2Mat(floor_rotation, model->geom_quat + 4 * floor_);
+    if (model->geom_type[floor_] != mjGEOM_PLANE || model->geom_bodyid[floor_] != 0 ||
+        std::abs(model->geom_pos[3 * floor_ + 2]) > 1e-12 ||
+        std::abs(floor_rotation[2]) > 1e-12 || std::abs(floor_rotation[5]) > 1e-12 ||
+        std::abs(floor_rotation[8] - 1) > 1e-12)
+      throw std::runtime_error("Contact labels require a world-fixed floor plane at Z=0 with +Z normal");
     for (const char *name : kTargets) {
       sites_.push_back(
           require_id(model, mjOBJ_SITE, std::string("tracking[") + name + "]"));
@@ -113,6 +90,7 @@ public:
       if (mocap_.back() < 0)
         throw std::runtime_error("Tracking target is not a mocap body");
     }
+    marker_sites_ = qmc_marker_site_ids(model);
     for (int side = 0; side < 2; ++side) {
       const std::string name = side == 0 ? "left" : "right";
       auto &foot = feet_[side];
@@ -136,7 +114,15 @@ public:
     Sample sample;
     auto &frame = sample.frame;
     frame.time = d->time;
+    frame.wrench_available = true;
     if (capture) {
+      for (int site : marker_sites_)
+        frame.markers_m.insert(frame.markers_m.end(), d->site_xpos + 3 * site,
+                               d->site_xpos + 3 * site + 3);
+      for (int site : sites_)
+        frame.tracking_positions_m.insert(frame.tracking_positions_m.end(),
+                                          d->site_xpos + 3 * site,
+                                          d->site_xpos + 3 * site + 3);
       frame.qpos.assign(d->qpos, d->qpos + model->nq);
       frame.qvel.assign(d->qvel, d->qvel + model->nv);
       frame.mocap_pos.assign(d->mocap_pos, d->mocap_pos + 3 * model->nmocap);
@@ -155,6 +141,7 @@ public:
     }
 
     double slip_load = 0;
+    std::array<ContactWrench, 2> wrenches{};
     std::array<std::array<double, 3>, 2> local_contact_sum{};
     for (int i = 0; i < d->ncon; ++i) {
       const auto &contact = d->contact[i];
@@ -177,9 +164,8 @@ public:
       }
 
       auto &diagnostic = side == 0 ? frame.left_contact : frame.right_contact;
-      auto &grf = side == 0 ? frame.grf_left : frame.grf_right;
-      auto &cop = side == 0 ? frame.cop_left : frame.cop_right;
-      mju_addTo3(grf.data(), force);
+      auto &cop = side == 0 ? frame.contact_proxy_left : frame.contact_proxy_right;
+      wrenches[side].add(contact, wrench, contact.geom[1] == floor_);
       ++diagnostic.contact_count;
       if (force[2] <= 0)
         continue;
@@ -211,9 +197,20 @@ public:
     }
     for (int side = 0; side < 2; ++side) {
       auto &diagnostic = side == 0 ? frame.left_contact : frame.right_contact;
+      auto &proxy = side == 0 ? frame.contact_proxy_left : frame.contact_proxy_right;
       auto &cop = side == 0 ? frame.cop_left : frame.cop_right;
+      auto &grf = side == 0 ? frame.grf_left : frame.grf_right;
+      auto &moment = side == 0 ? frame.moment_origin_left : frame.moment_origin_right;
+      auto &torque = side == 0 ? frame.torque_z_left : frame.torque_z_right;
+      auto &defined = side == 0 ? frame.cop_defined_left : frame.cop_defined_right;
+      const auto plane = plane_contact(wrenches[side]);
+      grf = wrenches[side].force;
+      moment = wrenches[side].moment;
+      cop = plane.cop;
+      torque = plane.free_moment_z;
+      defined = plane.defined;
       if (sample.foot_load[side] > 0) {
-        mju_scl3(cop.data(), cop.data(), 1 / sample.foot_load[side]);
+        mju_scl3(proxy.data(), proxy.data(), 1 / sample.foot_load[side]);
         for (int axis = 0; axis < 3; ++axis)
           diagnostic.contact_point_local[axis] =
               local_contact_sum[side][axis] / sample.foot_load[side];
@@ -229,14 +226,7 @@ public:
 
 private:
   int foot_side(const mjModel *model, int body) const {
-    while (body > 0) {
-      if (body == feet_[0].body)
-        return 0;
-      if (body == feet_[1].body)
-        return 1;
-      body = model->body_parentid[body];
-    }
-    return -1;
+    return tracking::foot_side(model, body, feet_[0].body, feet_[1].body);
   }
 
   int geom_slot(int side, int geom) const {
@@ -273,7 +263,7 @@ private:
   std::vector<double> jacobian_;
   int floor_;
   std::array<FootIds, 2> feet_{};
-  std::vector<int> sites_, mocap_;
+  std::vector<int> sites_, mocap_, marker_sites_;
 };
 
 bool numerical_failure(const mjModel *model, const mjData *data) {
@@ -389,8 +379,9 @@ void run(Prepared prepared, const RunConfig &config) {
   if (config.plan_every_n_steps < 1 || config.planner_threads < 1 ||
       config.warmup_iterations < 1 || config.replay_every_n_steps < 1)
     throw std::runtime_error("Invalid tracking configuration");
-  if (!std::isfinite(config.physics_timestep) || config.physics_timestep < 0)
-    throw std::runtime_error("Timestep must be finite and nonnegative");
+  if (!std::isfinite(config.physics_timestep) ||
+      std::abs(config.physics_timestep - 1.0 / kPhysicsHz) > 1e-15)
+    throw std::runtime_error("Physics timestep is fixed at 1/2400 seconds");
 
   auto *model = prepared.model.get();
   const Clip clip = prepared.clip;
@@ -402,7 +393,7 @@ void run(Prepared prepared, const RunConfig &config) {
     throw std::runtime_error(
         "Choose a timestep spanning 1 to 1,000,000 steps per episode");
   const int steps =
-      static_cast<int>(std::ceil(duration.effective / dt - 1e-9));
+      static_cast<int>(std::floor(duration.effective / dt + 1e-9));
   if (steps < 1)
     throw std::runtime_error("Duration must span at least one physics step");
 
@@ -478,6 +469,7 @@ void run(Prepared prepared, const RunConfig &config) {
     const bool capture =
         step % config.replay_every_n_steps == 0 || step == steps;
     auto sample = measurements.take(model, d, capture);
+    sample.frame.physics_step = step;
     const double rmse = std::sqrt(sample.position_mse);
     elapsed = d->time;
     // A diagnostic bundle may retain the valid prefix of a failed episode,
@@ -552,14 +544,15 @@ void run(Prepared prepared, const RunConfig &config) {
         measured_time > 0 ? std::sqrt(target_error_integral[target] / measured_time)
                           : 0.0;
   Json report = {
-      {"schema_version", 1},
+      {"schema_version", 2},
       {"motion", config.motion},
+      {"source_id", prepared.reference_id},
       {"mujoco_version", mj_versionString()},
       {"mjpc_revision", GRF_MJPC_REVISION},
       {"model_source", prepared.source},
       {"reference_first_key", clip.first},
       {"reference_frames", clip.count},
-      {"reference_fps", kReferenceFps},
+      {"reference_timestamps_s", std::vector<double>(model->key_time, model->key_time + model->nkey)},
       {"reference_duration_s", clip.duration()},
       {"requested_duration_s", duration.requested},
       {"effective_duration_s", duration.effective},
@@ -580,6 +573,19 @@ void run(Prepared prepared, const RunConfig &config) {
       {"completed_requested_duration", completed},
       {"completed_reference_clip",
        completed && duration.effective >= clip.duration() - 1e-9},
+      {"capture_hz", 1.0 / (dt * config.replay_every_n_steps)},
+      {"capture_every_n_steps", config.replay_every_n_steps},
+      {"capture_endpoint_policy", "include final floor(duration/dt) step even if off capture grid; never step beyond reference end"},
+      {"last_physics_time_s", steps * dt},
+      {"unsimulated_tail_s", duration.effective - steps * dt},
+      {"contact_label_convention", {
+          {"frame", "world, ground plane Z=0; floor-on-foot"},
+          {"moment_reference", "world origin"},
+          {"torque_z_reference", "vertical free moment about each foot CoP"},
+          {"sample_kind", "instantaneous mj_forward reconstruction on copied state with current control"},
+          {"cop_defined", "positive total Fz and finite plane-wrench arithmetic; no quality threshold"},
+          {"quality_threshold", nullptr},
+          {"diagnostic_contact_threshold_N", kContactThreshold}}},
       {"first_fall_time_s", first_fall < 0 ? Json(nullptr) : Json(first_fall)},
       {"tracking_rmse_m", measured_time > 0
                               ? Json(std::sqrt(error_integral / measured_time))
@@ -597,6 +603,7 @@ void run(Prepared prepared, const RunConfig &config) {
        foot_diagnostic_report(foot_loaded_time, contact_transitions,
                               geom_impulse, region_impulse, measured_time)},
       {"wall_time_s", wall_seconds},
+      {"wall_time_scope", "warmup, planning, physics and diagnostics; excludes reference/model preparation and bundle write"},
       {"planning_wall_time_s", planning_seconds},
       {"simulated_seconds_per_wall_second",
        wall_seconds > 0 ? elapsed / wall_seconds : 0.0},
@@ -611,11 +618,10 @@ void run(Prepared prepared, const RunConfig &config) {
         {"fall",
          "Non-foot floor contact with upward world force greater than 1 N"},
         {"foot_contact",
-         "Per-frame GRF, world contact-position proxy, per-geometry loads, "
-         "foot-frame contact point, foot attitude, ankle and MTP state"},
-        {"replay_arrows", "Visualization-only force arrows begin at the "
-                           "vertical-force-weighted contact-position proxy; "
-                           "they are not validated CoP labels"}}}};
+         "Per-frame full floor-on-foot wrench, ground-plane CoP/free moment, "
+         "separate contact proxy, per-geometry loads and foot kinematics"},
+        {"replay_arrows", "Visualization-only force arrows at ground-plane CoP "
+                           "where defined; 1 N display threshold"}}}};
   report["label"] = prepared.label;
   report["replay_every_n_steps"] = config.replay_every_n_steps;
   report["preparation"] = prepared.metadata;

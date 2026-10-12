@@ -144,7 +144,9 @@ void render_replay(mjModel *m,
   mjr_makeContext(m, &con, mjFONTSCALE_150);
 
   // Model lights follow the optional headlight in the abstract scene. Keep
-  // the overhead shadow for depth, but suppress the long side-light shadow.
+  // overhead point-light shadow and falloff, but move it farther away to
+  // reduce head/marker shadow magnification. Replay-only.
+  int overhead_light_scene_index = -1;
   int side_light_scene_index = -1;
   int scene_light_index = m->vis.headlight.active ? 1 : 0;
   for (int i = 0; i < m->nlight; ++i) {
@@ -153,6 +155,8 @@ void render_replay(mjModel *m,
     const char *name = mj_id2name(m, mjOBJ_LIGHT, i);
     if (name && std::strcmp(name, "spotlight") == 0)
       side_light_scene_index = scene_light_index;
+    if (name && std::strcmp(name, "top") == 0)
+      overhead_light_scene_index = scene_light_index;
     ++scene_light_index;
   }
 
@@ -218,6 +222,16 @@ void render_replay(mjModel *m,
     mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
     if (side_light_scene_index >= 0 && side_light_scene_index < scn.nlight)
       scn.lights[side_light_scene_index].castshadow = 0;
+    if (overhead_light_scene_index >= 0 && overhead_light_scene_index < scn.nlight) {
+      auto &light = scn.lights[overhead_light_scene_index];
+      light.directional = 0;
+      light.pos[0] = static_cast<float>(d->qpos[0]);
+      light.pos[1] = static_cast<float>(d->qpos[1]);
+      light.pos[2] = 6.0f;
+      light.dir[0] = 0;
+      light.dir[1] = 0;
+      light.dir[2] = -1;
+    }
 
     // Render the massless marker cloud after scene construction so it remains
     // visible but cannot distort the ground with a large collective shadow.
@@ -233,10 +247,10 @@ void render_replay(mjModel *m,
       geom.objid = site;
     }
 
-    // Ground-reaction arrows begin at the vertical-force-weighted contact
-    // position. They are a visual diagnostic, not validated CoP labels.
+    // V2 arrows use plane CoP; legacy V1 arrows retain their contact proxy.
+    // The 1 N display threshold is not a training-label validity threshold.
     auto draw_grf = [&](const auto &cop, const auto &grf, float *color) {
-      if (grf[2] > 1.0 &&
+      if (grf[2] > 1.0 && std::isfinite(cop[0]) && std::isfinite(cop[1]) &&
           scn.ngeom < scn.maxgeom) { // Draw if vertical force is meaningful
         double p2[3] = {cop[0] + grf[0] * kGrfArrowScale,
                         cop[1] + grf[1] * kGrfArrowScale,

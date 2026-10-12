@@ -1,96 +1,182 @@
-# Ground Reaction Force and Center of Pressure Estimation
+# GRF data factory
 
-This early research prototype uses MuJoCo and MuJoCo MPC (MJPC) to test whether the project’s male and female humanoid models can dynamically follow motion-capture-derived anatomical point trajectories. Its current job is a lean motion tracer bullet: produce one replayable tracking run and expose the contact behavior needed to judge it.
+Generates simulated motion and bilateral ground-contact labels from mocap trajectories using MuJoCo Predictive Control. Training inputs are executed, randomly ordered marker positions and total subject mass. Each foot's target is a six-parameter contact wrench: world-frame force `[Fx, Fy, Fz]`, ground-plane center of pressure `[CoPx, CoPy]`, and torsional friction moment `Tz` about the CoP.
 
-The source motion is represented by 16 three-dimensional target points: pelvis, head, bilateral toe, heel, knee, hand, elbow, shoulder, and hip. The controller always transfers those blue target trajectories in **raw** source coordinates, without dimensional scaling or source joint poses. It does not yet produce validated estimator-training labels or a learned estimator.
+Coordinates use metres, a right-handed frame, Z up, and ground at Z=0. Forces are in N and moments in Nm.
 
 ## Build
 
-The instructions target Linux. You need a C/C++17 toolchain, CMake 3.20 or newer, Git, and the graphics development packages used by GLFW and MuJoCo. The first configuration fetches dependencies.
+Requires Linux, C/C++17, CMake ≥3.20, Git and GLFW development dependencies. Debian/Ubuntu packages:
 
-For Debian/Ubuntu:
-
-~~~bash
-sudo apt install build-essential cmake git patch pkg-config libgl1-mesa-dev zlib1g-dev xorg-dev libwayland-dev libxkbcommon-dev
-~~~
-
-~~~bash
-git clone https://github.com/darrenbiskupphd/grf_estimation.git
-cd grf_estimation
+```bash
+sudo apt install build-essential cmake git patch pkg-config libgl1-mesa-dev \
+  zlib1g-dev xorg-dev libwayland-dev libxkbcommon-dev
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target data_factory --parallel 4
-~~~
+cmake --build build --parallel "$(nproc)"
 
-The build pins MuJoCo 3.2.6, GLFW 3.4, and MJPC revision ff572a21e7c2bf9fda62e1862a758da7e9a8719b.
+# Python tools for mocap conversion and dataset export
+python3 -m venv data/.venv-mocap
+data/.venv-mocap/bin/pip install -r python/requirements-mocap.txt
+```
 
-## Nominal models and controller
+CMake fetches MuJoCo 3.2.6, GLFW 3.4 and MJPC at `ff572a21e7c2bf9fda62e1862a758da7e9a8719b`. Upstream tracking-code license: `LICENSES/MJPC-Apache-2.0.txt`.
 
-The selected **O configuration is now the default**, not a separate preset. `assets/` contains only `winter_baseline_male.xml` and `plagenhoef_baseline_female.xml`. Both have bilateral `ankle_x` −12°/+30° and passive `shoulder3` limits of right −60°/+80°, left −80°/+60°; axial stiffness/damping remain 1/0.2 and ankle_x stiffness remains 3. The controller defaults to effort-rate weight 100, elbow position weight 16, hand position 8, elbow reference-velocity weight 0.02, roll 0, QMC 0, and one planner worker.
+## Convert mocap
 
-These are the adopted engineering settings, not validated anatomical ROM or GRF labels. Heel behavior and shoulder soft-limit overruns remain unresolved. Earlier nominal XMLs remain available in Git history; trial XML copies have been removed.
+Source recordings are C3D plus an explicit mapping JSON. The mapping selects source labels or weighted marker averages and defines expected source units and a rigid transform into the simulator's coordinate frame. Mappings live beside their dataset recordings; reviewed mappings are version-controlled while recordings remain ignored. See `data/mocap/cmu/mapping.json` for an example.
 
-## Run a tracking episode
+The importer generates a reference JSON (`schema_version`, `time_s[T]`, `positions_m[T,16,3]`, `target_names`, `metadata`) for `run --reference`. This generated file contains the 16 tracking-landmark trajectories; it is not an alternative source format. The simulator does not read C3D directly.
 
-Run from the repository root. The output path is explicit; **data/runs/** is ignored by Git and is created when needed. No wrapper or tuning flags are required for the default controller.
+```bash
+data/.venv-mocap/bin/python python/mocap_import.py inspect \
+  data/mocap/cmu/82/82_08.c3d --format cmu-c3d
 
-~~~bash
-./build/data_factory run \
-  --model assets/winter_baseline_male.xml \
-  --motion walk \
-  --qmc-index 0 \
-  --output data/runs/male_walk_raw.grf
-~~~
+data/.venv-mocap/bin/python python/mocap_import.py convert \
+  data/mocap/cmu/82/82_08.c3d --format cmu-c3d \
+  --mapping data/mocap/cmu/mapping.json --label-prefix Male1: \
+  --output data/mocap/cmu/82/82_08.reference.json \
+  --preview data/mocap/cmu/82/82_08.html
+xdg-open data/mocap/cmu/82/82_08.html
+```
 
-Use --render to show the recorded replay immediately after the run:
+The offline HTML shows landmark names, native-time playback, coordinates and foot-height traces. Conversion preserves native sample intervals, normalizes the time origin and records the original offset.
 
-~~~bash
-./build/data_factory run \
-  --model assets/plagenhoef_baseline_female.xml \
-  --motion walk \
-  --output data/runs/female_walk_raw.grf \
-  --render
-~~~
+The reference file is JSON with `schema_version: 1`, `time_s[T]`, `positions_m[T,16,3]`, `target_names[16]` and `metadata`. Landmark order:
 
-**walk** includes the source clip’s standing lead-in. The foot-only source clips are `walk`, `jump`, `dance`, `kick_spin`, and `spin_kick`; hand- or knee-supported acrobatics are intentionally excluded. The bundled `run` clip is retired (39 frames / 1.267 s); sustained running needs a replacement reference. Every run starts at source frame zero. Omit `--duration` for the full non-looping clip; a longer value stops at the clip end and the bundle records requested/effective/capped duration. An existing `--output` bundle is replaced only after the new bundle is written successfully. The runtime uses 2400 Hz physics, replans every 15 ms, evaluates the current policy at every physics step, and uses one planner worker unless `--threads` is supplied.
+```text
+pelvis, head, ltoe, rtoe, lheel, rheel, lknee, rknee,
+lhand, rhand, lelbow, relbow, lshoulder, rshoulder, lhip, rhip
+```
 
-The tracker copies the ordered 16 source points exactly, including for nonzero QMC morphology draws: there is no scale, alignment, or retargeting option. A one-time neutral-seeded pose fit and floor clearance configure the custom model’s initial physical state only; they never alter stored target coordinates. This is the intended input contract for future sources after their trajectories are distilled into the same ordered 16 points; external-trajectory import is not implemented yet.
+`metadata.source_id` or `metadata.source.source_id` identifies the original recording across model and marker-layout variants. Inspect the mapping and preview before simulation; no approval-status field is required.
 
-| QMC option | Default | Meaning |
-| --- | ---: | --- |
-| `--qmc-index <index>` | `0` | `0` keeps the nominal physical model and uses a canonical marker layout. A positive value is one joint Halton sample: bases 2 and 3 set the experimental global length/radius draw, while bases 5, 7, and 11 place seven massless surface markers on each eligible body. It is recorded in the bundle. |
+### Import arguments
 
-One episode index avoids two coupled command-line knobs while keeping morphology and marker placement in distinct QMC dimensions. Marker sites change no contact, inertia, or controller parameter. For example, use `--qmc-index 2` for a reproducible non-nominal visual test.
+| Argument | Required | Default | Purpose |
+|---|---|---|---|
+| `input` | Yes | — | Source file; positional argument |
+| `--format` | Yes | — | `c3d` or `cmu-c3d` (same reader, CMU provenance); applies to inspect/convert |
+| `--mapping` | Convert | — | Source labels, derivations, units and coordinate transform |
+| `--output` | Convert | — | Reference JSON destination; optional inspection-report destination for `inspect` |
+| `--preview` | No | None | Also write offline HTML |
+| `--label-prefix` | No | Mapping value | Override source-label namespace |
+| `--source-id` | No | Adapter-derived | Original recording identifier |
+| `--source-url` | No | Adapter-derived, if available | Source provenance |
+| `--force` | No | Off | Replace existing outputs |
+| `-h`, `--help` | No | Off | Show command help |
 
-`--effort-rate-weight <value>` controls the activation-rate penalty and defaults to **`100`**. Set it to `0` to disable the term. The cost is `0.5 * weight * mean((activation_rate / 20)^2)`, with activation rate in inverse seconds, computed from the existing filtered actuators. This regularizes changes in actuator effort; it does not directly penalize impacts or smooth recorded forces. The weight and definition are saved in the bundle's preparation metadata.
+To regenerate HTML from an existing reference: `python/mocap_preview.py REFERENCE --c3d SOURCE.c3d --output PREVIEW.html [--force]`. Conversion previews include all raw markers; standalone previews without `--c3d` show only the 16 tracking landmarks. Toggle the layers independently and select a landmark to highlight its source markers and weights. Invalid raw samples are hidden, never filled. Raw trajectories are embedded only in HTML, not runtime reference JSON.
 
-Experimental `--stance-roll-weight <value>` (default `0`) adds a reference-gated lateral foot-roll penalty, with no direct pitch penalty; the gate uses low/slow reference toe and heel markers, not simulated contact. Optional `--stance-roll-still-time <seconds>` (default `0`) requires that low/slow reference condition to persist before the roll cost engages. `--knee-hip-pos-scale <value>` (default `1`) multiplies only knee/hip position-tracking weights. `--elbow-velocity-weight <value>` defaults to `0.02` and changes **only** the existing left/right `Vel[elbow]` reference-tracking weight; it is not a penalty on absolute elbow speed or GRF changes. `--elbow-position-weight` defaults to **`16`** and `--hand-position-weight` to **`8`**; they change only the respective bilateral point-position terms. Shoulder and lower-body weights remain unchanged. These settings are recorded in preparation metadata and leave model physics and raw target trajectories unchanged. Overrides support controlled experiments; no setting implies validated GRF labels.
+## Simulate and replay
 
-## Replay a saved run
+```bash
+./build/data_factory run --reference data/mocap/cmu/82/82_08.reference.json \
+  --model assets/winter_baseline_male.xml --output data/runs/walk.grf
+./build/data_factory replay data/runs/walk.grf
+```
 
-~~~bash
-./build/data_factory replay data/runs/male_walk_raw.grf --speed 1
-~~~
+Available body models are `assets/winter_baseline_male.xml` and `assets/plagenhoef_baseline_female.xml`. Geometry determines mass and inertia through uniform density. Morphology and marker-layout indices are independent. Each of 14 eligible groups has 10 markers: **140 total**, with hands excluded. Each whole foot, including articulated toes, shares 10 markers. Sites are sampled over primitive surfaces, rejecting points buried inside other geometry at the neutral pose.
 
-`--speed` is a positive playback multiplier: `.25` is quarter speed and `1` is real time. For research replay reviews, use **1× Walk**, **0.5× Jump and Dance**, and **0.25× Kick Spin and Spin Kick**. Report the exact replay command for **every full clip and both sexes**, grouped by controller candidate (all A, then all B, then all C), with a short candidate legend; never make the reviewer infer settings from filenames. Scroll to zoom, left-drag to rotate, right-drag to pan vertically, Shift+right-drag to pan horizontally, and press `F` to toggle root-follow while inspecting a foot.
+Physics runs at **2400 Hz**. The planner replans every **15 ms (36 physics steps)**. Capture defaults to **600 Hz** and must divide 2400 into integer steps. Reference timing, capture rate and replay speed are independent. Simulation stops at the last physics step within the requested duration and includes that final frame even if it falls off the capture grid.
 
-The replay viewer draws cyan GRF arrows at `0.003 m/N` and leaves only the overhead model light casting a shadow; these display settings do not change saved forces or simulation physics.
+Non-foot ground support above 1 N, numerical failure or an unexpected reset stops the run. The saved file retains the valid prefix and termination reason; incomplete runs are excluded from dataset export by default.
 
-Each .grf file is a self-contained binary bundle containing the compiled model, 200 Hz sampled states and targets, force/contact diagnostics, and a JSON summary. New bundles include QMC marker sites; older saved bundles do not gain them retroactively. Replay loads its model from memory and does not replan or write side files. A new QMC bundle shows blue targets, orange tracking sites, red massless markers, and cyan GRF arrows. The red markers are rendered as decorative overlays, so they remain attached to the model without casting a collective ground shadow.
+### Run flags
 
-The force arrows begin at a vertical-force-weighted contact-position proxy. They are useful diagnostics, not validated CoP labels. A run stops before recording a loaded non-foot floor-contact frame or on numerical failure; use only bundles whose `completed_requested_duration` is true for downstream episodes.
+| Flag | Required | Default | Purpose |
+|---|---|---|---|
+| `--reference` | Yes | — | Timestamped reference JSON |
+| `--output` | Yes | — | Destination `.grf` file |
+| `--model` | No | `assets/winter_baseline_male.xml` | Body model XML |
+| `--duration` | No | Full reference | Duration in seconds, capped at reference end |
+| `--qmc-index` | No | `0` | Morphology index; 0 uses nominal dimensions |
+| `--layout-index` | No | `0` | Independent marker-layout index |
+| `--capture-hz` | No | `600` | Recorded samples per second |
+| `--threads` | No | `1` | Planner worker count |
+| `--render` | No | Off | Replay the run after simulation |
+| `--help` | No | Off | Show command help |
 
-## Current scope
+Controller overrides are optional; defaults are defined in `src/tracking/tracking.hpp` and the tracking model builder.
 
-- The physical XML models, contact settings, passive joints, and actuator parameters are preserved during tracking preparation.
-- Replay frames record per-foot GRF, the contact-position proxy, per-geometry normal loads, foot-frame contact position, foot pitch/roll, ankle state, and MTP state.
-- Positive morphology QMC indices retain the earlier global length/radius sampler. It is an experimental coverage tool, not a population-calibrated anthropometric distribution; do not begin a broad sweep before the foot-contact review.
-- One recorded QMC index supplies distinct Halton dimensions for morphology and marker placement. A later controlled cross of fixed morphology against several layouts belongs in the batch design, not in the runtime CLI.
-- The baseline feet use rounded capsules and a passive MTP joint. Heel/edge/toe behavior remains an active diagnostic question; no contact-physics tuning should be inferred from the current defaults.
+| Flag | Default | Purpose |
+|---|---|---|
+| `--effort-rate-weight` | `100` | Activation-change penalty |
+| `--stance-roll-weight` | `0` | Reference-gated lateral foot-roll penalty |
+| `--stance-roll-still-time` | `0` | Required prior low/slow foot interval, seconds |
+| `--knee-hip-pos-scale` | `1` | Knee/hip position-weight multiplier |
+| `--elbow-velocity-weight` | `0.02` | Elbow reference-velocity weight |
+| `--elbow-position-weight` | `16` | Elbow position weight |
+| `--hand-position-weight` | `8` | Hand position weight |
 
-## Repository layout
+`replay` takes a required positional `.grf` path and optional `--speed` (default `1`). Replay speed changes playback only, not the recorded dynamics.
 
-- [assets/](assets/): nominal male and female MuJoCo models.
-- [src/tracking/](src/tracking/): model assembly (`build_reference_tracking_model.cpp`), initialization (`initialize_reference_tracking_state.cpp`), objective (`reference_task.cpp`), runner, run bundles, and contact diagnostics.
-- [src/viewer.cpp](src/viewer.cpp): replay viewer.
-- [python/xml_visualizer.py](python/xml_visualizer.py): exploratory baseline-model inspection helper.
-- data/runs/: ignored, explicitly requested local run bundles.
+## What is a `.grf` file?
+
+A `.grf` is a custom **self-contained binary simulation recording**, not just a force array and not the training dataset. It contains the compiled `mjModel`, captured states and contact labels needed to replay a run or generate different marker observations without simulating it again.
+
+The runner collects frames in memory. At the end of a run, it serializes the model with MuJoCo's `mj_saveModel`, validates the frames, writes a temporary file, then atomically replaces the destination. A version-2 file consists of:
+
+| Block | Contents |
+|---|---|
+| Header | Format identifier/version, model and summary byte counts, frame count, state dimensions and marker count |
+| Compiled model | MuJoCo MJB bytes: geometry, mass/inertia, joints, actuators, sites and reference keyframes |
+| Run summary | Embedded JSON containing source identity, configuration, timing, marker-layout audit, diagnostics and termination status |
+| Frame records | Timestamp and physics-step index; joint positions/velocities; actuator activations and controls; reference mocap positions/orientations; executed observation markers and tracking landmarks; bilateral forces, moments, CoP, torsional friction moment about CoP and validity masks; contact diagnostics |
+
+Numeric frame arrays are stored as doubles. The format uses native binary representations and embeds a MuJoCo-version-dependent model; it is not a portable interchange standard. The loader requires the same MuJoCo version recorded in the summary. No original XML or mocap file is needed for replay. Replay restores saved states rather than rerunning the planner. The recording is not a restart checkpoint: planner policies and full solver history are not saved.
+
+Forces are reconstructed at the captured state using a forward pass on a copy of simulation data. Labels are instantaneous, not capture-interval averages. Each foot's wrench aggregates all floor contacts on its descendants, including toes and contact torques. Force is floor-on-foot in world coordinates; raw moment is about world origin. Each foot's own aggregated contact wrench is expressed at its ground-plane CoP, not at the whole-body CoP.
+
+The six-parameter target is `[Fx, Fy, Fz, CoPx, CoPy, Tz_at_CoP]`. `Tz_at_CoP` is the resultant torsional friction moment at the foot–ground interface, including distributed contact forces and contact torques—not the moment about world origin. CoP Z is fixed at zero; the resultant horizontal moment components about CoP are zero by construction.
+
+CoP and its torsional moment are undefined for nonpositive vertical force or nonfinite results. Raw forces and world-origin moments remain in the recording for later threshold selection. Flight samples are retained. Legacy version-1 recordings are replay-only because they lack the full-wrench labels.
+
+## Training dataset
+
+Export produces one compressed NumPy archive directly from `.grf` recordings, without intermediate JSON or sidecar files:
+
+```bash
+./build/data_factory export data/runs/walk.grf --output data/datasets/walk.npz
+```
+
+### Export arguments
+
+| Argument | Required | Default | Purpose |
+|---|---|---|---|
+| `RUN.grf...` | Yes | — | One or more recordings |
+| `--output` | Yes | — | Destination `.npz` archive |
+| `--layout-index` | No | Recorded layout | Sample alternative marker attachments using saved poses |
+| `--permutation-seed` | No | `0` | Fixed-within-episode anonymous marker permutation |
+| `--min-normal-force` | No | `0` N | Require Fz above this value for CoP/torsional-moment labels |
+| `--allow-incomplete` | No | Off | Include incomplete recordings for diagnostics |
+| `--help` | No | Off | Show command help |
+
+`T` is the total sample count, `E` the episode count, and `M` the marker count. Foot order is left, right; wrench components are `[Fx, Fy, Fz, CoPx, CoPy, Tz_at_CoP]` in N, m and Nm respectively.
+
+| Array | Shape | Contents |
+|---|---|---|
+| `markers_m` | `[T,M,3]` | Executed marker positions; fixed slot correspondence within each episode |
+| `mass_kg` | `[E]` | Subject mass per episode |
+| `time_s` | `[T]` | Recorded sample times |
+| `contact_wrench` | `[T,2,6]` | Bilateral six-parameter contact-wrench targets |
+| `episode_offsets` | `[E+1]` | Episode boundaries |
+| `source_id` | `[E]` | Original recording IDs for partition grouping |
+
+During flight, GRF components are zero and CoP/torsional-moment components are NaN. Derive the target loss mask with `numpy.isfinite` and exclude or replace undefined components before loss arithmetic. Raw moments, model state and marker/body identities stay in `.grf`, not the training archive. Alternate observation layouts change only marker positions, not the recorded motion or contact labels.
+
+Load with `numpy.load(path, allow_pickle=False)`. Slice episode `e` using `episode_offsets[e]:episode_offsets[e+1]` and pair it with `mass_kg[e]`. Do not form temporal windows across episode boundaries. Keep all variants of an original recording in the same dataset partition.
+
+## Development tests
+
+These are regression tests for maintaining the importer, simulator and exporter—not a procedure for accepting a new mocap recording. Run them after code, model-building or file-format changes to catch broken contact conventions, timing, marker attachments or serialization.
+
+- `tests/` C++ tests cover force signs, toe aggregation, static/flight contact, momentum balance, capture timing, marker placement, reference interpolation, bundle compatibility and offline export.
+- `tests/test_mocap_import.py` covers source parsing, mapping, units, timestamps and preview generation.
+- `tests/test_export_dataset.py` validates direct NPZ export, array shapes, episode boundaries and flight labels using NumPy.
+
+```bash
+ctest --test-dir build --output-on-failure
+PYTHONDONTWRITEBYTECODE=1 data/.venv-mocap/bin/python -m unittest discover -s tests
+```
+
+For a fresh recording, use `inspect`, convert with its mapping, inspect the reference preview, then run and replay the simulator. Passing regression tests does not establish that a particular recording is mapped correctly or produces realistic motion.

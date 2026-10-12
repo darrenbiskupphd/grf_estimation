@@ -1,5 +1,12 @@
-data/
+data/*
+!data/mocap/
+data/mocap/*
+!data/mocap/cmu/
+data/mocap/cmu/*
+!data/mocap/cmu/mapping.json
 build/
+__pycache__/
+*.pyc
 pyrefly.toml
 MUJOCO_LOG.TXT
 .cache/
