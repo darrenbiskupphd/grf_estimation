@@ -17,11 +17,12 @@ inline constexpr double kStanceSpeedOff = 0.20;   // horizontal m/s
 void add_reference_tracking_objective(mjSpec *spec, const mjModel *baseline,
                                       double effort_rate_weight = 100,
                                       double stance_roll_weight = 0,
-                                      double knee_hip_position_scale = 1,
+                                      double knee_hip_position_scale = .8,
                                       double stance_roll_still_time_s = 0,
                                       double elbow_velocity_weight = 0.02,
                                       double elbow_position_weight = 16,
-                                      double hand_position_weight = 8);
+                                      double hand_position_weight = 8,
+                                      double foot_position_weight = 200);
 
 // Point tracking with optional activation-rate and reference-gated roll costs;
 // one externally supplied, timestamped clip; no physical state changes inside

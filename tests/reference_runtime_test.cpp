@@ -1,11 +1,13 @@
 // Kinematic/runtime regression only: no mj_step, planner rollout or episode.
 #include "tracking/reference_task.hpp"
+#include "tracking/qmc_sampling.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,7 +30,7 @@ void near(double actual, double expected, const std::string &message,
 struct Fixture {
   std::filesystem::path path;
   ReferenceData reference;
-  Fixture() {
+  explicit Fixture(double translation = .01) {
     path = std::filesystem::temp_directory_path() /
            ("grf_reference_runtime_" +
             std::to_string(std::chrono::steady_clock::now()
@@ -43,7 +45,7 @@ struct Fixture {
     for (int frame = 0; frame < 3; ++frame) {
       Json points = Json::array();
       for (const auto &point : neutral)
-        points.push_back({point[0] + .01 * frame, point[1], point[2]});
+        points.push_back({point[0] + translation * frame, point[1], point[2]});
       positions.push_back(points);
     }
     const Json document = {
@@ -95,20 +97,20 @@ void objective_template(const mjModel *model) {
     int dimension;
     std::array<double, 6> userdata;
   };
-  // Pinned stock norm definitions, with the project's unchanged O weights.
+  // Pinned stock norm definitions, with the project's approved default weights.
   const ExpectedCost costs[] = {
       {"Joint Vel.", model->nv - 6, {0, .001, 0, .01, 0, 0}},
       {"Control", model->nu, {3, .1, 0, 1, .3, 0}},
       {"Pos[avg]", 3, {6, 100, 0, 100, .1, 0}},
       {"Pos[pelvis]", 3, {6, 40, 0, 100, .1, 0}},
       {"Pos[head]", 3, {6, 0, 0, 100, .1, 0}},
-      {"Pos[toe]", 6, {7, 80, 0, 100, .2, 4}},
-      {"Pos[heel]", 6, {7, 80, 0, 100, .2, 4}},
-      {"Pos[knee]", 6, {6, 55, 0, 100, .1, 0}},
+      {"Pos[toe]", 6, {7, 200, 0, 100, .2, 4}},
+      {"Pos[heel]", 6, {7, 200, 0, 100, .2, 4}},
+      {"Pos[knee]", 6, {6, 44, 0, 100, .1, 0}},
       {"Pos[hand]", 6, {6, 8, 0, 100, .1, 0}},
       {"Pos[elbow]", 6, {7, 16, 0, 100, .2, 4}},
       {"Pos[shoulder]", 6, {6, 8, 0, 100, .1, 0}},
-      {"Pos[hip]", 6, {6, 50, 0, 100, .1, 0}},
+      {"Pos[hip]", 6, {6, 40, 0, 100, .1, 0}},
       {"Vel[root]", 3, {6, .12, 0, 1, .3, 0}},
       {"Vel[head]", 3, {6, 0, 0, 1, .3, 0}},
       {"Vel[toe]", 6, {6, .25, 0, 1, .3, 0}},
@@ -127,7 +129,7 @@ void objective_template(const mjModel *model) {
     check(model->sensor_dim[id] == cost.dimension, "cost sensor dimension");
     for (int slot = 0; slot < 6; ++slot)
       near(model->sensor_user[id * model->nuser_sensor + slot], cost.userdata[slot],
-           std::string("O norm/weight: ") + cost.name, 0);
+           std::string("Default norm/weight: ") + cost.name, 0);
   }
 }
 
@@ -237,6 +239,110 @@ void native_stance_gate(const std::string &model_path, const Fixture &fixture) {
            std::sqrt(gate / 2) * roll, "native speed and sustained-stance gate");
   }
 }
+void foot_position_override(const char *xml, const Fixture &fixture) {
+  PrepareConfig config;
+  config.reference_path = fixture.path;
+  auto baseline = build_reference_tracking_model(xml, config);
+  near(baseline.metadata["foot_position_weight"], 200, "default foot provenance");
+  for (double weight : {0.0, 100.0}) {
+    config.foot_position_weight = weight;
+    auto candidate = build_reference_tracking_model(xml, config);
+    near(candidate.metadata["foot_position_weight"], weight, "foot provenance");
+    auto *a = baseline.model.get();
+    auto *b = candidate.model.get();
+    check(a->nsensor == b->nsensor, "unchanged sensor layout");
+    for (int id = 0; id < a->nsensor; ++id) {
+      const std::string name = mj_id2name(a, mjOBJ_SENSOR, id);
+      for (int slot = 0; slot < a->nuser_sensor; ++slot) {
+        const bool changed = slot == 1 &&
+            (name == "Pos[toe]" || name == "Pos[heel]");
+        near(b->sensor_user[id * b->nuser_sensor + slot],
+             changed ? weight : a->sensor_user[id * a->nuser_sensor + slot],
+             "only foot position weights change", 0);
+      }
+    }
+    assert_raw_targets(b, fixture.reference);
+  }
+  for (double weight : {-1.0, std::numeric_limits<double>::infinity(),
+                        std::numeric_limits<double>::quiet_NaN()}) {
+    config.foot_position_weight = weight;
+    bool rejected = false;
+    try { build_reference_tracking_model(xml, config); }
+    catch (const std::runtime_error &) { rejected = true; }
+    check(rejected, "invalid foot weight rejected");
+  }
+}
+void default_toe_geometry(const std::string &xml, const Fixture &fixture) {
+  for (int index : {0, 7}) {
+    PrepareConfig config;
+    config.reference_path = fixture.path;
+    config.qmc_index = index;
+    auto prepared = build_reference_tracking_model(xml, config);
+    auto *b = prepared.model.get();
+    PrepareConfig approved = config;
+    approved.knee_hip_position_scale = .8;
+    approved.foot_position_weight = 200;
+    approved.effort_rate_weight = 100;
+    approved.elbow_position_weight = 16;
+    approved.hand_position_weight = 8;
+    approved.stance_roll_weight = 0;
+    auto explicit_config = build_reference_tracking_model(xml, approved);
+    check(prepared.metadata == explicit_config.metadata, "default/approved provenance parity");
+    check(b->nsensor == explicit_config.model->nsensor, "default sensor layout parity");
+    for (int i = 0; i < b->nsensor * b->nuser_sensor; ++i)
+      near(b->sensor_user[i], explicit_config.model->sensor_user[i], "default weight parity", 0);
+    objective_template(b);
+    char error[1024] = {};
+    SpecPtr spec(mj_parseXML(xml.c_str(), nullptr, error, sizeof(error)), mj_deleteSpec);
+    check(bool(spec), error);
+    apply_morphology_qmc(spec.get(), index);
+    ModelPtr physical(mj_compile(spec.get(), nullptr), mj_deleteModel);
+    check(bool(physical), "physical model compiles");
+    auto *a = physical.get();
+    near(prepared.metadata["knee_hip_position_scale"], .8, "knee/hip provenance");
+    near(prepared.metadata["foot_position_weight"], 200, "foot provenance");
+    check(prepared.metadata["toe_site_height_convention"] ==
+          "highest paired capsule crown in toe-local z; x/y unchanged over gap, not surface",
+          "toe height provenance");
+    for (const auto &side : {std::string("left"), std::string("right")}) {
+      const int i = require_id(b, mjOBJ_SITE, side == "left" ? "tracking[ltoe]" : "tracking[rtoe]");
+      const int toe = require_id(b, mjOBJ_BODY, "toe_" + side);
+      check(b->site_bodyid[i] == toe, "toe body attachment");
+      near(b->site_pos[3*i], 0, "toe x unchanged", 0);
+      near(b->site_pos[3*i+1], 0, "toe y unchanged", 0);
+      double crown = -1e30;
+      for (const auto &prefix : {"toe1_", "toe2_"}) {
+        int g = require_id(a, mjOBJ_GEOM, prefix + side);
+        double rot[9]; mju_quat2Mat(rot, a->geom_quat + 4*g);
+        crown = std::max(crown, a->geom_pos[3*g+2] +
+            std::abs(rot[8])*a->geom_size[3*g+1] + a->geom_size[3*g]);
+      }
+      near(b->site_pos[3*i+2], crown, "toe crown after morphology");
+      const auto &metadata = prepared.metadata["toe_sites"][side];
+      check(metadata["body"] == "toe_" + side, "toe attachment provenance");
+      for (int axis = 0; axis < 3; ++axis)
+        near(metadata["position_m"][axis], b->site_pos[3*i+axis], "toe position provenance", 0);
+      const int heel = require_id(b, mjOBJ_SITE, side == "left" ? "tracking[lheel]" : "tracking[rheel]");
+      const int foot = require_id(a, mjOBJ_BODY, "foot_" + side);
+      const int g = require_id(a, mjOBJ_GEOM, "foot1_" + side);
+      double rot[9]; mju_quat2Mat(rot, a->geom_quat + 4*g);
+      check(b->site_bodyid[heel] == foot, "heel attachment unchanged");
+      near(b->site_pos[3*heel], a->geom_pos[3*g] - std::abs(rot[2])*a->geom_size[3*g+1], "heel x unchanged");
+      near(b->site_pos[3*heel+1], 0, "heel y unchanged", 0);
+      near(b->site_pos[3*heel+2], .04 * -a->body_pos[3*foot+2] / .39, "heel z unchanged");
+    }
+    check(a->ngeom == b->ngeom, "physical geom count unchanged");
+    for (int g = 0; g < a->ngeom; ++g) {
+      for (int k = 0; k < 3; ++k) {
+        near(a->geom_pos[3*g+k], b->geom_pos[3*g+k], "geom position unchanged", 0);
+        near(a->geom_size[3*g+k], b->geom_size[3*g+k], "geom size unchanged", 0);
+      }
+      for (int k = 0; k < 4; ++k)
+        near(a->geom_quat[4*g+k], b->geom_quat[4*g+k], "geom rotation unchanged", 0);
+    }
+    assert_raw_targets(b, fixture.reference);
+  }
+}
 void aligned_initialization(mjModel *model) {
   auto data = make_data(model);
   // Exactly reachable neutral landmarks, far from the model origin and facing
@@ -268,12 +374,16 @@ void aligned_initialization(mjModel *model) {
 int main(int argc, char **argv) try {
   if (argc != 2)
     throw std::runtime_error("Usage: reference_runtime_test <physical_model.xml>");
-  Fixture fixture;
+  // Larger translation avoids a zero-progress second IK fit on either body.
+  Fixture fixture(.05);
   PrepareConfig config;
   config.reference_path = fixture.path;
   auto prepared = build_reference_tracking_model(argv[1], config);
   interpolation_and_initialization(prepared, fixture);
-  native_stance_gate(argv[1], fixture);
+  Fixture stance_fixture;
+  native_stance_gate(argv[1], stance_fixture);
+  foot_position_override(argv[1], fixture);
+  default_toe_geometry(argv[1], fixture);
   aligned_initialization(prepared.model.get());
   std::cout << "Reference runtime/IK/template tests passed (no simulation)\n";
   return 0;

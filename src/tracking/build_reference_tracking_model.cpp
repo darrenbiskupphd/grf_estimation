@@ -56,7 +56,6 @@ void add_tracking_sites(mjSpec *spec, const mjModel *baseline) {
     // Heel sits above the rear sole; toe target follows the passive MTP body.
     const int geom = require_id(baseline, mjOBJ_GEOM, "foot1_" + side);
     const int toe = require_id(baseline, mjOBJ_BODY, "toe_" + side);
-    const double toe_x = baseline->body_pos[3 * toe];
     // The capsule's local z axis spans the two endpoints in the compiled model.
     double rotation[9];
     mju_quat2Mat(rotation, baseline->geom_quat + 4 * geom);
@@ -65,8 +64,21 @@ void add_tracking_sites(mjSpec *spec, const mjModel *baseline) {
         std::abs(rotation[2]) * baseline->geom_size[3 * geom + 1];
     site(spec, "foot_" + side, "tracking[" + prefix + "heel]",
          {heel_x, 0, .04 * shin_scale});
+    // Highest paired capsule crown in toe-body coordinates. This is a
+    // HEIGHT convention: x=y=0 remains over the gap, not on the surface.
+    double toe_z = -1e30;
+    for (const auto &part : {"toe1_", "toe2_"}) {
+      const int g = require_id(baseline, mjOBJ_GEOM, part + side);
+      if (baseline->geom_bodyid[g] != toe ||
+          baseline->geom_type[g] != mjGEOM_CAPSULE)
+        throw std::runtime_error("Expected toe-local paired capsules");
+      mju_quat2Mat(rotation, baseline->geom_quat + 4 * g);
+      toe_z = std::max(toe_z, baseline->geom_pos[3 * g + 2] +
+          std::abs(rotation[8]) * baseline->geom_size[3 * g + 1] +
+          baseline->geom_size[3 * g]);
+    }
     site(spec, "toe_" + side, "tracking[" + prefix + "toe]",
-         {0, 0, -.01 * toe_x / .07});
+         {0, 0, toe_z});
     site(spec, "upper_arm_" + side, "tracking[" + prefix + "shoulder]",
          {0, 0, 0});
     site(spec, "lower_arm_" + side, "tracking[" + prefix + "elbow]", {0, 0, 0});
@@ -165,7 +177,8 @@ Prepared build_reference_tracking_model(const std::string &model_path,
                                     config.stance_roll_still_time_s,
                                     config.elbow_velocity_weight,
                                     config.elbow_position_weight,
-                                    config.hand_position_weight);
+                                    config.hand_position_weight,
+                                    config.foot_position_weight);
   const int marker_site_count =
       add_qmc_marker_sites(spec.get(), baseline.get());
   for (int frame = 0; frame < frame_count; ++frame) {
@@ -244,6 +257,15 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       {"target_order", kTargets},
       {"initialization", initialization},
       {"training_labels_validated", false}};
+  prepared.metadata["toe_site_height_convention"] =
+      "highest paired capsule crown in toe-local z; x/y unchanged over gap, not surface";
+  for (const auto &side : {std::string("left"), std::string("right")}) {
+    const int id = require_id(model, mjOBJ_SITE,
+        side == "left" ? "tracking[ltoe]" : "tracking[rtoe]");
+    prepared.metadata["toe_sites"][side] = {
+        {"body", "toe_" + side},
+        {"position_m", {model->site_pos[3 * id], model->site_pos[3 * id + 1], model->site_pos[3 * id + 2]}}};
+  }
   prepared.metadata["effort_rate_cost"] = {
       {"weight", config.effort_rate_weight},
       {"activation_rate_scale_per_s", kEffortRateScale},
@@ -263,6 +285,7 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       {"horizontal_speed_off_m_per_s", kStanceSpeedOff},
       {"minimum_continuous_reference_stance_s",
        config.stance_roll_still_time_s}};
+  prepared.metadata["foot_position_weight"] = config.foot_position_weight;
   prepared.metadata["knee_hip_position_scale"] =
       config.knee_hip_position_scale;
   prepared.metadata["elbow_velocity_tracking"] = {

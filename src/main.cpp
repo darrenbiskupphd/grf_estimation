@@ -45,8 +45,9 @@ void usage(std::ostream &stream) {
       << "  --effort-rate-weight <value>  100 (activation-rate cost; 0 disables)\n"
       << "  --stance-roll-weight <value> 0 (reference-gated lateral foot roll)\n"
       << "  --stance-roll-still-time <s> 0 (prior low/slow reference duration)\n"
-      << "  --knee-hip-pos-scale <value> 1 (experimental knee/hip position weights)\n"
+      << "  --knee-hip-pos-scale <value> 0.8 (knee/hip position weights)\n"
       << "  --elbow-velocity-weight <v>  0.02 (reference elbow-velocity tracking)\n"
+      << "  --foot-position-weight <v>   200 (both toe/heel position targets)\n"
       << "  --elbow-position-weight <v>  16 (both elbow position targets)\n"
       << "  --hand-position-weight <v>   8 (both hand position targets)\n"
       << "  --render                      render the saved in-memory replay\n\n"
@@ -112,6 +113,10 @@ int run(int argc, char **argv) {
       prepare.elbow_velocity_weight = number(argv[++i]);
       if (prepare.elbow_velocity_weight < 0)
         throw std::runtime_error("--elbow-velocity-weight must be nonnegative");
+    } else if (arg == "--foot-position-weight" && i + 1 < argc) {
+      prepare.foot_position_weight = number(argv[++i]);
+      if (prepare.foot_position_weight < 0)
+        throw std::runtime_error("--foot-position-weight must be nonnegative");
     } else if (arg == "--elbow-position-weight" && i + 1 < argc) {
       prepare.elbow_position_weight = number(argv[++i]);
       if (prepare.elbow_position_weight < 0)

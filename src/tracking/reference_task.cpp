@@ -16,11 +16,12 @@ double controller_weight(const std::string &name, double baseline_weight,
                          double knee_hip_position_scale,
                          double elbow_velocity_weight,
                          double elbow_position_weight,
-                         double hand_position_weight) {
+                         double hand_position_weight,
+                         double foot_position_weight) {
   // This is the frozen baseline objective, not a physical contact constraint.
   // Keep these settings beside the residual layout they weight.
   if (name == "Pos[toe]" || name == "Pos[heel]")
-    return 80.0;
+    return foot_position_weight;
   if (name == "Vel[toe]" || name == "Vel[heel]")
     return 0.25;
   if (name == "Pos[knee]")
@@ -107,7 +108,10 @@ void add_reference_tracking_objective(mjSpec *spec, const mjModel *baseline,
                                       double stance_roll_still_time_s,
                                       double elbow_velocity_weight,
                                       double elbow_position_weight,
-                                      double hand_position_weight) {
+                                      double hand_position_weight,
+                                      double foot_position_weight) {
+  if (!std::isfinite(foot_position_weight) || foot_position_weight < 0)
+    throw std::runtime_error("Foot-position weight must be finite and nonnegative");
   if (!std::isfinite(effort_rate_weight) || effort_rate_weight < 0)
     throw std::runtime_error("Effort-rate weight must be finite and nonnegative");
   if (!std::isfinite(stance_roll_weight) || stance_roll_weight < 0)
@@ -155,7 +159,8 @@ void add_reference_tracking_objective(mjSpec *spec, const mjModel *baseline,
     auto userdata = cost.userdata;
     userdata[1] = controller_weight(name, userdata[1], knee_hip_position_scale,
                                     elbow_velocity_weight,
-                                    elbow_position_weight, hand_position_weight);
+                                    elbow_position_weight, hand_position_weight,
+                                    foot_position_weight);
     mjs_setDouble(sensor->userdata, userdata.data(), userdata.size());
   }
   // All cost sensors must precede the physical sensors. Omit the term at

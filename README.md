@@ -96,6 +96,8 @@ Non-foot ground support above 1 N, numerical failure or an unexpected reset stop
 | `--render` | No | Off | Replay the run after simulation |
 | `--help` | No | Off | Show command help |
 
+Toe tracking sites always use the highest paired capsule crown **height** after morphology scaling, with toe-local x/y = 0 over the gap—not a physical surface point. Toe-body attachment, heel placement and physical geometry are unchanged; site positions and the height convention are saved in preparation provenance.
+
 Controller overrides are optional; defaults are defined in `src/tracking/tracking.hpp` and the tracking model builder.
 
 | Flag | Default | Purpose |
@@ -103,8 +105,9 @@ Controller overrides are optional; defaults are defined in `src/tracking/trackin
 | `--effort-rate-weight` | `100` | Activation-change penalty |
 | `--stance-roll-weight` | `0` | Reference-gated lateral foot-roll penalty |
 | `--stance-roll-still-time` | `0` | Required prior low/slow foot interval, seconds |
-| `--knee-hip-pos-scale` | `1` | Knee/hip position-weight multiplier |
+| `--knee-hip-pos-scale` | `0.8` | Knee/hip position-weight multiplier |
 | `--elbow-velocity-weight` | `0.02` | Elbow reference-velocity weight |
+| `--foot-position-weight` | `200` | Shared bilateral toe/heel position weight (finite, nonnegative; velocities unchanged) |
 | `--elbow-position-weight` | `16` | Elbow position weight |
 | `--hand-position-weight` | `8` | Hand position weight |
 

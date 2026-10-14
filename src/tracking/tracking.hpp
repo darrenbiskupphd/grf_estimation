@@ -34,8 +34,9 @@ struct PrepareConfig {
   double effort_rate_weight = 100; // O default; zero disables the rate cost.
   double stance_roll_weight = 0; // Experimental; zero preserves the objective.
   double stance_roll_still_time_s = 0; // Require sustained reference stance.
-  double knee_hip_position_scale = 1; // Experimental; 1 preserves weights.
+  double knee_hip_position_scale = .8; // Knee/hip position-weight multiplier.
   double elbow_velocity_weight = 0.02; // Existing Vel[elbow] reference-tracking weight.
+  double foot_position_weight = 200; // Shared bilateral toe/heel position weight.
   double elbow_position_weight = 16; // O default, bilateral Pos[elbow].
   double hand_position_weight = 8; // Existing Pos[hand] weight, both sides.
 };
