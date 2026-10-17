@@ -143,6 +143,70 @@ ReferenceData load_reference(const std::filesystem::path &path) {
   }
 }
 
+nlohmann::json scale_reference_to_model(
+    ReferenceData &reference, const ReferencePoints &model_neutral_points) {
+  if (reference.positions_m.empty())
+    invalid("scaling requires reference frames");
+  // 3D chain length is a size proxy, not standing height or anatomical length.
+  auto chain_lengths = [](const ReferencePoints &points) {
+    std::array<double, 2> lengths;
+    auto distance = [&](int a, int b) {
+      const double d = std::hypot(points[3 * a] - points[3 * b],
+                                  points[3 * a + 1] - points[3 * b + 1],
+                                  points[3 * a + 2] - points[3 * b + 2]);
+      if (!std::isfinite(d) || d <= 1e-9)
+        invalid("scaling requires finite, nondegenerate body-chain segments");
+      return d;
+    };
+    for (int side = 0; side < 2; ++side) {
+      lengths[side] = distance(4 + side, 6 + side) +
+                      distance(6 + side, 14 + side) +
+                      distance(14 + side, 12 + side) +
+                      distance(12 + side, 1);
+      if (!std::isfinite(lengths[side]))
+        invalid("nonfinite body-chain length proxy");
+    }
+    return lengths;
+  };
+  const auto target = chain_lengths(model_neutral_points);
+  const double model_length = .5 * target[0] + .5 * target[1];
+  std::vector<double> lengths;
+  lengths.reserve(2 * reference.positions_m.size());
+  for (const auto &points : reference.positions_m) {
+    const auto chains = chain_lengths(points);
+    lengths.insert(lengths.end(), chains.begin(), chains.end());
+  }
+  std::sort(lengths.begin(), lengths.end());
+  const std::size_t middle = lengths.size() / 2;
+  const double source_length = .5 * lengths[middle - 1] + .5 * lengths[middle];
+  const double scale = model_length / source_length;
+  if (!std::isfinite(scale) || scale <= 0)
+    invalid("invalid reference scale");
+  // Scale height about Z=0 only. Preserve XY exactly, including travel path.
+  // Validate before committing, including non-chain points and overflow.
+  auto transformed = reference.positions_m;
+  for (auto &points : transformed)
+    for (std::size_t i = 0; i < points.size(); ++i) {
+      if (i % 3 == 2 && scale != 1)
+        points[i] *= scale;
+      if (!std::isfinite(points[i]))
+        invalid("nonfinite scaled reference coordinate");
+    }
+  reference.positions_m = std::move(transformed);
+  return {{"mode", "body-height"},
+          {"scale", scale},
+          {"scaled_axes", "z"},
+          {"ground_z_m", 0.0},
+          {"source_chain_length_m", source_length},
+          {"model_chain_length_m", model_length},
+          {"source_chain_length_min_m", lengths.front()},
+          {"source_chain_length_max_m", lengths.back()},
+          {"method", "Z-only; pooled median sum of 3D heel-knee-hip-shoulder-head "
+                     "distances across both sides/all frames; target uses "
+                     "mean bilateral neutral tracking-site chains"},
+          {"timestamps_modified", false}};
+}
+
 ReferenceInterpolation reference_interpolation(const double *time_s,
                                                 std::size_t count,
                                                 double time) {

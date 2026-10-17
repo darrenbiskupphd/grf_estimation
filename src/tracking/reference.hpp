@@ -35,6 +35,13 @@ struct ReferenceData {
 ReferenceData parse_reference(const nlohmann::json &document);
 ReferenceData load_reference(const std::filesystem::path &path);
 
+// Z-only normalization using the pooled median sum of 3D distances along
+// heel-knee-hip-shoulder-head on both sides/all frames, relative to the mean
+// neutral model chain length. XY/timing/provenance unchanged; scale about Z=0.
+// Returns transform provenance; rejects degenerate/nonfinite chain segments.
+nlohmann::json scale_reference_to_model(
+    ReferenceData &reference, const ReferencePoints &model_neutral_points);
+
 // Check once when loading/resetting, not on every planner residual evaluation.
 // The runtime uses the compiled model's key_time array as the time authority.
 void validate_reference_times(const double *time_s, std::size_t count);

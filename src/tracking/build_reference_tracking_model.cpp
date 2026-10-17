@@ -46,16 +46,13 @@ void add_tracking_sites(mjSpec *spec, const mjModel *baseline) {
   for (const auto &side : {std::string("left"), std::string("right")}) {
     const std::string prefix = side == "left" ? "l" : "r";
     const int shin = require_id(baseline, mjOBJ_BODY, "shin_" + side);
-    const int foot = require_id(baseline, mjOBJ_BODY, "foot_" + side);
     const double thigh_scale = -baseline->body_pos[3 * shin + 2] / .4;
-    const double shin_scale = -baseline->body_pos[3 * foot + 2] / .39;
     site(spec, "thigh_" + side, "tracking[" + prefix + "hip]",
          {0, side == "left" ? -.025 : .025, .025 * thigh_scale});
     site(spec, "shin_" + side, "tracking[" + prefix + "knee]",
          {0, 0, .05 * thigh_scale});
-    // Heel sits above the rear sole; toe target follows the passive MTP body.
+    // Heel lies between the rear capsule endpoint centres, at axis height.
     const int geom = require_id(baseline, mjOBJ_GEOM, "foot1_" + side);
-    const int toe = require_id(baseline, mjOBJ_BODY, "toe_" + side);
     // The capsule's local z axis spans the two endpoints in the compiled model.
     double rotation[9];
     mju_quat2Mat(rotation, baseline->geom_quat + 4 * geom);
@@ -63,22 +60,9 @@ void add_tracking_sites(mjSpec *spec, const mjModel *baseline) {
         baseline->geom_pos[3 * geom] -
         std::abs(rotation[2]) * baseline->geom_size[3 * geom + 1];
     site(spec, "foot_" + side, "tracking[" + prefix + "heel]",
-         {heel_x, 0, .04 * shin_scale});
-    // Highest paired capsule crown in toe-body coordinates. This is a
-    // HEIGHT convention: x=y=0 remains over the gap, not on the surface.
-    double toe_z = -1e30;
-    for (const auto &part : {"toe1_", "toe2_"}) {
-      const int g = require_id(baseline, mjOBJ_GEOM, part + side);
-      if (baseline->geom_bodyid[g] != toe ||
-          baseline->geom_type[g] != mjGEOM_CAPSULE)
-        throw std::runtime_error("Expected toe-local paired capsules");
-      mju_quat2Mat(rotation, baseline->geom_quat + 4 * g);
-      toe_z = std::max(toe_z, baseline->geom_pos[3 * g + 2] +
-          std::abs(rotation[8]) * baseline->geom_size[3 * g + 1] +
-          baseline->geom_size[3 * g]);
-    }
-    site(spec, "toe_" + side, "tracking[" + prefix + "toe]",
-         {0, 0, toe_z});
+         {heel_x, 0, 0});
+    // Track the articulated toe-body origin, without a height offset.
+    site(spec, "toe_" + side, "tracking[" + prefix + "toe]", {0, 0, 0});
     site(spec, "upper_arm_" + side, "tracking[" + prefix + "shoulder]",
          {0, 0, 0});
     site(spec, "lower_arm_" + side, "tracking[" + prefix + "elbow]", {0, 0, 0});
@@ -156,7 +140,7 @@ Prepared build_reference_tracking_model(const std::string &model_path,
         "QMC morphology and marker-layout indices must be nonnegative");
   // Validate the external data before parsing or modifying the physical model.
   // The MJPC/O objective is installed separately; no bundled motion is loaded.
-  const ReferenceData reference = load_reference(config.reference_path);
+  ReferenceData reference = load_reference(config.reference_path);
   const int frame_count = static_cast<int>(reference.time_s.size());
   const std::string reference_id = reference.source_id;
 
@@ -195,8 +179,20 @@ Prepared build_reference_tracking_model(const std::string &model_path,
   place_qmc_marker_sites(model, config.layout_index);
   const auto destination_mocap = target_mocap_ids(model);
 
-  // The runtime intentionally transfers the source point coordinates exactly:
-  // no rigid alignment, scaling, or source joint trajectory is applied.
+  nlohmann::json scaling = {{"mode", "none"}, {"scale", 1.0}};
+  if (config.scale_reference) {
+    // Measure the actual morphed model at qpos0, before fitting any source pose.
+    auto neutral = make_data(model);
+    mj_forward(model, neutral.get());
+    ReferencePoints points;
+    for (std::size_t i = 0; i < kTargets.size(); ++i) {
+      const int id = require_id(model, mjOBJ_SITE,
+          std::string("tracking[") + kTargets[i] + "]");
+      mju_copy3(points.data() + 3 * i, neutral->site_xpos + 3 * id);
+    }
+    scaling = scale_reference_to_model(reference, points);
+  }
+  // Initialization and runtime keys consume exactly the same prepared targets.
   for (int frame = 0; frame < frame_count; ++frame)
     write_targets(model, frame, reference.positions_m[frame], destination_mocap);
 
@@ -249,7 +245,8 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       {"reference_time_s", reference.time_s},
       {"reference_time_origin_s", reference.time_origin_s},
       {"reference_metadata", reference.metadata},
-      {"reference_coordinates_modified", false},
+      {"reference_coordinates_modified", scaling["scale"].get<double>() != 1.0},
+      {"reference_scaling", scaling},
       {"reference_interpolation", "native timestamp piecewise linear; right-"
                                   "segment velocity; zero velocity at/after end"},
       {"controller_template", "frozen MJPC humanoid tracking objective with O "
@@ -258,8 +255,15 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       {"initialization", initialization},
       {"training_labels_validated", false}};
   prepared.metadata["toe_site_height_convention"] =
-      "highest paired capsule crown in toe-local z; x/y unchanged over gap, not surface";
+      "toe-body origin; local XYZ zero; no height offset";
+  prepared.metadata["heel_site_height_convention"] =
+      "rear capsule endpoint centreline; foot-local Y/Z zero; no height offset";
   for (const auto &side : {std::string("left"), std::string("right")}) {
+    const int heel = require_id(model, mjOBJ_SITE,
+        side == "left" ? "tracking[lheel]" : "tracking[rheel]");
+    prepared.metadata["heel_sites"][side] = {
+        {"body", "foot_" + side},
+        {"position_m", {model->site_pos[3 * heel], model->site_pos[3 * heel + 1], model->site_pos[3 * heel + 2]}}};
     const int id = require_id(model, mjOBJ_SITE,
         side == "left" ? "tracking[ltoe]" : "tracking[rtoe]");
     prepared.metadata["toe_sites"][side] = {
@@ -278,7 +282,7 @@ Prepared build_reference_tracking_model(const std::string &model_path,
       {"definition", "0.5 * weight * mean(reference_stance_gate * "
                      "foot_lateral_roll_rad^2); no pitch penalty"},
       {"gate", "minimum of each foot's toe/heel smooth height and horizontal-"
-               "speed scores from raw reference keys, interpolated in time"},
+               "speed scores from prepared reference keys, interpolated in time"},
       {"height_full_m", kStanceHeightFull},
       {"height_off_m", kStanceHeightOff},
       {"horizontal_speed_full_m_per_s", kStanceSpeedFull},

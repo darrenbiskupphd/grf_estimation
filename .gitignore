@@ -1,9 +1,8 @@
-data/*
-!data/mocap/
-data/mocap/*
-!data/mocap/cmu/
-data/mocap/cmu/*
-!data/mocap/cmu/mapping.json
+mocap/*
+!mocap/cmu/
+mocap/cmu/*
+!mocap/cmu/mapping.json
+.venv-mocap/
 build/
 __pycache__/
 *.pyc

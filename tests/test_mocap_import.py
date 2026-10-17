@@ -31,7 +31,7 @@ class ImportTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
-        self.mapping = mi.load_json(ROOT / "data/mocap/cmu/mapping.json")
+        self.mapping = mi.load_json(ROOT / "mocap/cmu/mapping.json")
         self.labels = []
         for spec in self.mapping["targets"].values():
             for label in spec.get("labels", [spec.get("label")]):
@@ -288,7 +288,7 @@ drawView();check(arcs.length===0 && projected.length===1);
         path = self.write_c3d()
         output, html_path = self.directory / "ref.json", self.directory / "ref.html"
         args = ["convert", str(path), "--format", "c3d", "--mapping",
-                str(ROOT / "data/mocap/cmu/mapping.json"), "--output", str(output),
+                str(ROOT / "mocap/cmu/mapping.json"), "--output", str(output),
                 "--preview", str(html_path)]
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(mi.main(args), 0)

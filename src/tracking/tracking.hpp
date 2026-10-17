@@ -29,6 +29,7 @@ ResolvedDuration resolve_duration(const Clip &clip, double requested_duration);
 struct PrepareConfig {
   std::filesystem::path reference_path; // Required schema-v1 external JSON.
   std::string motion; // Optional display/keyframe id; defaults to reference id.
+  bool scale_reference = true; // Whole-body-chain size proxy; scale Z only.
   int qmc_index = 0;
   int layout_index = 0; // Independent observation-marker layout.
   double effort_rate_weight = 100; // O default; zero disables the rate cost.
@@ -67,7 +68,7 @@ void run(Prepared prepared, const RunConfig &config);
 Prepared build_reference_tracking_model(const std::string &model_path,
                                         const PrepareConfig &config);
 
-// Set initial physical key states from the first two raw reference samples,
+// Set initial physical key states from the first two prepared reference samples,
 // using model->key_time[1] - model->key_time[0] for the velocity difference.
 // This never modifies the reference coordinates or model physics.
 nlohmann::json initialize_reference_tracking_state(

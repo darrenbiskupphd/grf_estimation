@@ -52,7 +52,19 @@ int main(int argc, char **argv) try {
   PrepareConfig prep;
   prep.reference_path = ref;
   auto prepared = build_reference_tracking_model(argv[1], prep);
-  const auto reference = load_reference(ref);
+  auto reference = load_reference(ref);
+  const auto scaling = prepared.metadata["reference_scaling"];
+  check(scaling["mode"] == "body-height", "Default scaling missing");
+  check(scaling["scaled_axes"] == "z" && !scaling.contains("anchor_m"),
+        "Expected Z-only scaling metadata");
+  near(scaling["ground_z_m"], 0);
+  for (const char *key : {"source_chain_length_m", "model_chain_length_m",
+                          "source_chain_length_min_m", "source_chain_length_max_m"})
+    check(scaling.contains(key), "Missing chain length metadata");
+  const double scale = scaling["scale"];
+  for (auto &frame : reference.positions_m)
+    for (int i = 2; i < 48; i += 3)
+      frame[i] *= scale;
   RunConfig run_config;
   run_config.output_path = output;
   run_config.motion = prepared.reference_id;
@@ -60,6 +72,8 @@ int main(int argc, char **argv) try {
       std::max(1u, std::thread::hardware_concurrency());
   run(std::move(prepared), run_config);
   auto bundle = load_run_bundle(output);
+  check(bundle.summary["preparation"]["reference_scaling"] == scaling,
+        "Scaling provenance survives bundle roundtrip");
   check(bundle.summary["completed_requested_duration"] == true,
         "Synthetic run did not complete");
   check(bundle.frames.size() == 4, "Expected captures at steps 0,4,8,9");

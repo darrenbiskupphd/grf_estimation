@@ -2,10 +2,10 @@
 """Strict, reference-only C3D importer (Python >= 3.10).
 
 Install: python -m pip install -r python/requirements-mocap.txt
-Inspect: python python/mocap_import.py inspect data/mocap/cmu/82/82_08.c3d --format cmu-c3d
-Import:  python python/mocap_import.py convert data/mocap/cmu/82/82_08.c3d \
-  --format cmu-c3d --mapping data/mocap/cmu/mapping.json --label-prefix Male1: \
-  --output data/mocap/cmu/82/82_08.reference.json --preview data/mocap/cmu/82/82_08.html
+Inspect: python python/mocap_import.py inspect mocap/cmu/82/82_08.c3d --format cmu-c3d
+Import:  python python/mocap_import.py convert mocap/cmu/82/82_08.c3d \
+  --format cmu-c3d --mapping mocap/cmu/mapping.json --label-prefix Male1: \
+  --output mocap/cmu/82/82_08.reference.json --preview mocap/cmu/82/82_08.html
 
 Source input is C3D plus an explicit mapping JSON. Use --format c3d for general
 recordings; cmu-c3d uses the same reader with CMU provenance conventions.
@@ -19,7 +19,7 @@ intentionally unsupported when measured C3D trajectories are available. C3D
 0.6.0 extended starting-frame inconsistencies (>65535) are rejected explicitly,
 not silently shifted.
 
-Mapping contract (see data/mocap/cmu/mapping.json):
+Mapping contract (see mocap/cmu/mapping.json):
 - Exactly the workspace's 16 named targets, in TARGET_NAMES order on output.
 - Each target is either kind='marker' with 'label', or kind='weighted_mean'
   with explicit source 'labels' and nonnegative 'weights' summing to one.

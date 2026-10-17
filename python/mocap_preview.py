@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Generate a standalone, offline, reference-only HTML inspection (no GUI opens).
 
-  python python/mocap_preview.py data/mocap/cmu/143/143_38.reference.json \
-    --c3d data/mocap/cmu/143/143_38.c3d \
-    --output data/mocap/cmu/143/143_38.html --force
+  python python/mocap_preview.py mocap/cmu/143/143_38.reference.json \
+    --c3d mocap/cmu/143/143_38.c3d \
+    --output mocap/cmu/143/143_38.html --force
 
 Open the resulting HTML in any modern browser. Play at native timestamps, step
 samples, scrub, rotate/zoom, inspect all raw markers and the 16 named tracking

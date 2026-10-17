@@ -30,7 +30,7 @@ void near(double actual, double expected, const std::string &message,
 struct Fixture {
   std::filesystem::path path;
   ReferenceData reference;
-  explicit Fixture(double translation = .01) {
+  explicit Fixture(double translation = .01, bool articulated = false) {
     path = std::filesystem::temp_directory_path() /
            ("grf_reference_runtime_" +
             std::to_string(std::chrono::steady_clock::now()
@@ -46,6 +46,17 @@ struct Fixture {
       Json points = Json::array();
       for (const auto &point : neutral)
         points.push_back({point[0] + translation * frame, point[1], point[2]});
+      if (articulated) {
+        // Nonneutral first pose and changing upper-body geometry ensure the
+        // independent pooled-chain oracle cannot reduce to first-frame legs.
+        points[1][0] = .08 + .04 * (2 - frame);
+        points[12][2] = 1.5 + .03 * frame;
+        points[13][0] = -.02 * (2 - frame);
+        points[0][1] = .02 * frame;
+        points[0][2] = 1 + .01 * frame;
+        points[8][1] = .5 + .03 * frame;
+        points[9][2] = 1.1 + .02 * frame;
+      }
       positions.push_back(points);
     }
     const Json document = {
@@ -215,6 +226,7 @@ void interpolation_and_initialization(Prepared &prepared, const Fixture &fixture
 
 void native_stance_gate(const std::string &model_path, const Fixture &fixture) {
   PrepareConfig config;
+  config.scale_reference = false;
   config.reference_path = fixture.path;
   config.stance_roll_weight = 1;
   config.stance_roll_still_time_s = .15;
@@ -241,6 +253,7 @@ void native_stance_gate(const std::string &model_path, const Fixture &fixture) {
 }
 void foot_position_override(const char *xml, const Fixture &fixture) {
   PrepareConfig config;
+  config.scale_reference = false;
   config.reference_path = fixture.path;
   auto baseline = build_reference_tracking_model(xml, config);
   near(baseline.metadata["foot_position_weight"], 200, "default foot provenance");
@@ -275,6 +288,7 @@ void foot_position_override(const char *xml, const Fixture &fixture) {
 void default_toe_geometry(const std::string &xml, const Fixture &fixture) {
   for (int index : {0, 7}) {
     PrepareConfig config;
+    config.scale_reference = false;
     config.reference_path = fixture.path;
     config.qmc_index = index;
     auto prepared = build_reference_tracking_model(xml, config);
@@ -302,7 +316,7 @@ void default_toe_geometry(const std::string &xml, const Fixture &fixture) {
     near(prepared.metadata["knee_hip_position_scale"], .8, "knee/hip provenance");
     near(prepared.metadata["foot_position_weight"], 200, "foot provenance");
     check(prepared.metadata["toe_site_height_convention"] ==
-          "highest paired capsule crown in toe-local z; x/y unchanged over gap, not surface",
+          "toe-body origin; local XYZ zero; no height offset",
           "toe height provenance");
     for (const auto &side : {std::string("left"), std::string("right")}) {
       const int i = require_id(b, mjOBJ_SITE, side == "left" ? "tracking[ltoe]" : "tracking[rtoe]");
@@ -310,14 +324,7 @@ void default_toe_geometry(const std::string &xml, const Fixture &fixture) {
       check(b->site_bodyid[i] == toe, "toe body attachment");
       near(b->site_pos[3*i], 0, "toe x unchanged", 0);
       near(b->site_pos[3*i+1], 0, "toe y unchanged", 0);
-      double crown = -1e30;
-      for (const auto &prefix : {"toe1_", "toe2_"}) {
-        int g = require_id(a, mjOBJ_GEOM, prefix + side);
-        double rot[9]; mju_quat2Mat(rot, a->geom_quat + 4*g);
-        crown = std::max(crown, a->geom_pos[3*g+2] +
-            std::abs(rot[8])*a->geom_size[3*g+1] + a->geom_size[3*g]);
-      }
-      near(b->site_pos[3*i+2], crown, "toe crown after morphology");
+      near(b->site_pos[3*i+2], 0, "toe origin after morphology", 0);
       const auto &metadata = prepared.metadata["toe_sites"][side];
       check(metadata["body"] == "toe_" + side, "toe attachment provenance");
       for (int axis = 0; axis < 3; ++axis)
@@ -329,7 +336,15 @@ void default_toe_geometry(const std::string &xml, const Fixture &fixture) {
       check(b->site_bodyid[heel] == foot, "heel attachment unchanged");
       near(b->site_pos[3*heel], a->geom_pos[3*g] - std::abs(rot[2])*a->geom_size[3*g+1], "heel x unchanged");
       near(b->site_pos[3*heel+1], 0, "heel y unchanged", 0);
-      near(b->site_pos[3*heel+2], .04 * -a->body_pos[3*foot+2] / .39, "heel z unchanged");
+      near(b->site_pos[3*heel+2], 0, "heel axis height after morphology", 0);
+      check(prepared.metadata["heel_site_height_convention"] ==
+            "rear capsule endpoint centreline; foot-local Y/Z zero; no height offset",
+            "heel height provenance");
+      const auto &heel_metadata = prepared.metadata["heel_sites"][side];
+      check(heel_metadata["body"] == "foot_" + side, "heel attachment provenance");
+      for (int axis = 0; axis < 3; ++axis)
+        near(heel_metadata["position_m"][axis], b->site_pos[3*heel+axis],
+             "heel position provenance", 0);
     }
     check(a->ngeom == b->ngeom, "physical geom count unchanged");
     for (int g = 0; g < a->ngeom; ++g) {
@@ -343,6 +358,126 @@ void default_toe_geometry(const std::string &xml, const Fixture &fixture) {
     assert_raw_targets(b, fixture.reference);
   }
 }
+void default_reference_scaling(const std::string &xml, const Fixture &fixture) {
+  for (int index : {0, 7}) {
+    PrepareConfig config; // Deliberately exercise the enabled default.
+    config.reference_path = fixture.path;
+    config.qmc_index = index;
+    check(config.scale_reference, "reference scaling defaults enabled");
+    auto prepared = build_reference_tracking_model(xml, config);
+    auto *model = prepared.model.get();
+    auto neutral = make_data(model);
+    mj_resetData(model, neutral.get());
+    mju_copy(neutral->qpos, model->qpos0, model->nq);
+    mj_forward(model, neutral.get());
+    ReferencePoints points{};
+    for (int target = 0; target < 16; ++target) {
+      const int site = require_id(model, mjOBJ_SITE,
+          std::string("tracking[") + kTargets[target] + "]");
+      mju_copy(points.data() + 3 * target, neutral->site_xpos + 3 * site, 3);
+    }
+    auto length = [](const ReferencePoints &p, int side) {
+      double result = 0;
+      const int chain[] = {4 + side, 6 + side, 14 + side, 12 + side, 1};
+      for (int edge = 0; edge < 4; ++edge) {
+        double squared = 0;
+        for (int axis = 0; axis < 3; ++axis) {
+          const double delta = p[3 * chain[edge] + axis] -
+                               p[3 * chain[edge + 1] + axis];
+          squared += delta * delta;
+        }
+        result += std::sqrt(squared);
+      }
+      return result;
+    };
+    const double model_length = (length(points, 0) + length(points, 1)) / 2;
+    std::vector<double> chains;
+    for (const auto &frame : fixture.reference.positions_m)
+      for (int side : {0, 1}) chains.push_back(length(frame, side));
+    std::sort(chains.begin(), chains.end());
+    const double source_length = (chains[chains.size()/2 - 1] + chains[chains.size()/2]) / 2;
+    const double scale = model_length / source_length;
+    check(std::abs(scale - 1) > 1e-6, "nonidentity runtime fixture");
+    const auto &info = prepared.metadata["reference_scaling"];
+    check(info["mode"] == "body-height", "runtime scaling mode");
+    near(info["scale"], scale, "scale from qpos0 sites after morphology");
+    near(info["model_chain_length_m"], model_length, "neutral model proxy");
+    near(info["source_chain_length_m"], source_length, "runtime source proxy");
+    near(info["source_chain_length_min_m"], chains.front(), "source minimum chain");
+    near(info["source_chain_length_max_m"], chains.back(), "source maximum chain");
+    check(info["scaled_axes"] == "z" && !info.contains("anchor_m"), "Z-only provenance");
+    near(info["ground_z_m"], 0, "zero ground plane", 0);
+    check(prepared.metadata["reference_coordinates_modified"].get<bool>(),
+          "transformed coordinate provenance");
+    check(prepared.metadata["reference_metadata"] == fixture.reference.metadata,
+          "scaling preserves original provenance");
+    auto expected = fixture.reference;
+    for (auto &frame : expected.positions_m)
+      for (int i = 2; i < 48; i += 3)
+        frame[i] *= scale;
+    // Compare every compiled key, not just pelvis or the proxy landmarks.
+    for (int key = 0; key < model->nkey; ++key) {
+      near(model->key_time[key], expected.time_s[key], "scaled native time", 0);
+      for (int target = 0; target < 16; ++target) {
+        const int body = require_id(model, mjOBJ_BODY,
+            std::string("mocap[") + kTargets[target] + "]");
+        const int id = model->body_mocapid[body];
+        for (int axis = 0; axis < 3; ++axis)
+          near(model->key_mpos[3 * model->nmocap * key + 3 * id + axis],
+               expected.positions_m[key][3 * target + axis], "scaled compiled target",
+               axis == 2 ? 1e-10 : 0);
+      }
+    }
+    const std::vector<double> pose(model->key_qpos, model->key_qpos + model->nq);
+    const std::vector<double> velocity(model->key_qvel, model->key_qvel + model->nv);
+    initialize_reference_tracking_state(model, expected.positions_m[0], expected.positions_m[1]);
+    for (int i = 0; i < model->nq; ++i)
+      near(model->key_qpos[i], pose[i], "initialization consumes transformed positions", 1e-8);
+    for (int i = 0; i < model->nv; ++i)
+      near(model->key_qvel[i], velocity[i], "initialization consumes transformed motion", 1e-8);
+    prepared.task->Reset(model);
+    auto data = make_data(model);
+    std::vector<double> residual(prepared.task->num_residual);
+    for (double time : {0., .05, .1, .25, .4, .5}) {
+      data->time = time;
+      prepared.task->Transition(model, data.get());
+      prepared.task->Residual(model, data.get(), residual.data());
+      const auto sample = sample_reference(expected, time);
+      const int offset = model->nv - 6 + model->nu + 3 + 48;
+      for (int target = 0; target < 16; ++target) {
+        const std::string name = kTargets[target];
+        const int body = require_id(model, mjOBJ_BODY, "mocap[" + name + "]");
+        const int sensor = require_id(model, mjOBJ_SENSOR, "tracking_linvel[" + name + "]");
+        for (int axis = 0; axis < 3; ++axis) {
+          near(data->mocap_pos[3 * model->body_mocapid[body] + axis],
+               sample.positions_m[3 * target + axis], "scaled runtime position");
+          near(residual[offset + 3 * target + axis],
+               sample.velocities_m_per_s[3 * target + axis] -
+               data->sensordata[model->sensor_adr[sensor] + axis], "scaled runtime velocity");
+        }
+      }
+    }
+    config.scale_reference = false;
+    auto disabled = build_reference_tracking_model(xml, config);
+    assert_raw_targets(disabled.model.get(), fixture.reference);
+    check(!disabled.metadata["reference_coordinates_modified"].get<bool>(), "disable modification flag");
+    auto *raw = disabled.model.get();
+    check(raw->nbody == model->nbody && raw->ngeom == model->ngeom &&
+          raw->nq == model->nq && raw->nv == model->nv, "scaling leaves physical topology intact");
+    for (int i = 0; i < model->nbody; ++i) {
+      near(raw->body_mass[i], model->body_mass[i], "physical mass unchanged", 0);
+      for (int axis = 0; axis < 3; ++axis) {
+        near(raw->body_pos[3*i+axis], model->body_pos[3*i+axis], "body position unchanged", 0);
+        near(raw->body_inertia[3*i+axis], model->body_inertia[3*i+axis], "inertia unchanged", 0);
+      }
+    }
+    for (int i = 0; i < 3 * model->ngeom; ++i) {
+      near(raw->geom_pos[i], model->geom_pos[i], "physical geometry position unchanged", 0);
+      near(raw->geom_size[i], model->geom_size[i], "physical geometry size unchanged", 0);
+    }
+  }
+}
+
 void aligned_initialization(mjModel *model) {
   auto data = make_data(model);
   // Exactly reachable neutral landmarks, far from the model origin and facing
@@ -377,6 +512,7 @@ int main(int argc, char **argv) try {
   // Larger translation avoids a zero-progress second IK fit on either body.
   Fixture fixture(.05);
   PrepareConfig config;
+  config.scale_reference = false;
   config.reference_path = fixture.path;
   auto prepared = build_reference_tracking_model(argv[1], config);
   interpolation_and_initialization(prepared, fixture);
@@ -385,6 +521,8 @@ int main(int argc, char **argv) try {
   foot_position_override(argv[1], fixture);
   default_toe_geometry(argv[1], fixture);
   aligned_initialization(prepared.model.get());
+  Fixture scaling_fixture(.05, true);
+  default_reference_scaling(argv[1], scaling_fixture);
   std::cout << "Reference runtime/IK/template tests passed (no simulation)\n";
   return 0;
 } catch (const std::exception &error) {

@@ -37,6 +37,7 @@ void usage(std::ostream &stream) {
       << "Run options:\n"
       << "  --model <XML>                 assets/winter_baseline_male.xml\n"
       << "  --reference <JSON>            timestamped 16-target reference (required)\n"
+      << "  --reference-scaling <mode>    body-height (default) or none; Z only\n"
       << "  --duration <seconds>          full clip (caps at clip end)\n"
       << "  --qmc-index <index>           0 (nominal morphology)\n"
       << "  --layout-index <index>        0 (independent marker layout)\n"
@@ -72,6 +73,11 @@ int run(int argc, char **argv) {
       model_path = argv[++i];
     } else if (arg == "--reference" && i + 1 < argc) {
       prepare.reference_path = argv[++i];
+    } else if (arg == "--reference-scaling" && i + 1 < argc) {
+      const std::string mode = argv[++i];
+      if (mode != "body-height" && mode != "none")
+        throw std::runtime_error("--reference-scaling must be body-height or none");
+      prepare.scale_reference = mode == "body-height";
     } else if (arg == "--layout-index" && i + 1 < argc) {
       prepare.layout_index = integer(argv[++i]);
       if (prepare.layout_index < 0)

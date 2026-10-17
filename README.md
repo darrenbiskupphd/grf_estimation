@@ -15,28 +15,42 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel "$(nproc)"
 
 # Python tools for mocap conversion and dataset export
-python3 -m venv data/.venv-mocap
-data/.venv-mocap/bin/pip install -r python/requirements-mocap.txt
+python3 -m venv .venv-mocap
+.venv-mocap/bin/pip install -r python/requirements-mocap.txt
 ```
 
 CMake fetches MuJoCo 3.2.6, GLFW 3.4 and MJPC at `ff572a21e7c2bf9fda62e1862a758da7e9a8719b`. Upstream tracking-code license: `LICENSES/MJPC-Apache-2.0.txt`.
 
+## Storage layout
+
+`mocap/` contains input recordings, converted tracking references and previews. Only reviewed mapping files are version-controlled; recordings and `.venv-mocap/` stay ignored. Generated runs and datasets live outside the repository, with explicit CLI paths and no symlinks.
+
+Local SSD setup (adjust for another machine; `GRF_DATA` is a shell variable, not application configuration):
+
+```bash
+mountpoint -q /run/media/darren/darren_ssd || { echo 'Mount the SSD first'; exit 1; }
+export GRF_DATA=/run/media/darren/darren_ssd/data/grf_estimation
+mkdir -p "$GRF_DATA/runs" "$GRF_DATA/datasets"
+```
+
+Existing campaigns are under `$GRF_DATA/runs/cmu_screening_30/` and `$GRF_DATA/runs/cmu_screening_centerline/`. Their historical commands/provenance retain the original paths; use their new location for replay. Keep an independent backup of the SSD. A training machine can use a different data root and download only the needed NPZ exports.
+
 ## Convert mocap
 
-Source recordings are C3D plus an explicit mapping JSON. The mapping selects source labels or weighted marker averages and defines expected source units and a rigid transform into the simulator's coordinate frame. Mappings live beside their dataset recordings; reviewed mappings are version-controlled while recordings remain ignored. See `data/mocap/cmu/mapping.json` for an example.
+Source recordings are C3D plus an explicit mapping JSON. The mapping selects source labels or weighted marker averages and defines expected source units and a rigid transform into the simulator's coordinate frame. Mappings live beside their dataset recordings; reviewed mappings are version-controlled while recordings remain ignored. See `mocap/cmu/mapping.json` for an example.
 
 The importer generates a reference JSON (`schema_version`, `time_s[T]`, `positions_m[T,16,3]`, `target_names`, `metadata`) for `run --reference`. This generated file contains the 16 tracking-landmark trajectories; it is not an alternative source format. The simulator does not read C3D directly.
 
 ```bash
-data/.venv-mocap/bin/python python/mocap_import.py inspect \
-  data/mocap/cmu/82/82_08.c3d --format cmu-c3d
+.venv-mocap/bin/python python/mocap_import.py inspect \
+  mocap/cmu/82/82_08.c3d --format cmu-c3d
 
-data/.venv-mocap/bin/python python/mocap_import.py convert \
-  data/mocap/cmu/82/82_08.c3d --format cmu-c3d \
-  --mapping data/mocap/cmu/mapping.json --label-prefix Male1: \
-  --output data/mocap/cmu/82/82_08.reference.json \
-  --preview data/mocap/cmu/82/82_08.html
-xdg-open data/mocap/cmu/82/82_08.html
+.venv-mocap/bin/python python/mocap_import.py convert \
+  mocap/cmu/82/82_08.c3d --format cmu-c3d \
+  --mapping mocap/cmu/mapping.json --label-prefix Male1: \
+  --output mocap/cmu/82/82_08.reference.json \
+  --preview mocap/cmu/82/82_08.html
+xdg-open mocap/cmu/82/82_08.html
 ```
 
 The offline HTML shows landmark names, native-time playback, coordinates and foot-height traces. Conversion preserves native sample intervals, normalizes the time origin and records the original offset.
@@ -70,9 +84,9 @@ To regenerate HTML from an existing reference: `python/mocap_preview.py REFERENC
 ## Simulate and replay
 
 ```bash
-./build/data_factory run --reference data/mocap/cmu/82/82_08.reference.json \
-  --model assets/winter_baseline_male.xml --output data/runs/walk.grf
-./build/data_factory replay data/runs/walk.grf
+./build/data_factory run --reference mocap/cmu/82/82_08.reference.json \
+  --model assets/winter_baseline_male.xml --output "${GRF_DATA:?Set GRF_DATA first}/runs/walk.grf"
+./build/data_factory replay "${GRF_DATA:?Set GRF_DATA first}/runs/walk.grf"
 ```
 
 Available body models are `assets/winter_baseline_male.xml` and `assets/plagenhoef_baseline_female.xml`. Geometry determines mass and inertia through uniform density. Morphology and marker-layout indices are independent. Each of 14 eligible groups has 10 markers: **140 total**, with hands excluded. Each whole foot, including articulated toes, shares 10 markers. Sites are sampled over primitive surfaces, rejecting points buried inside other geometry at the neutral pose.
@@ -86,6 +100,7 @@ Non-foot ground support above 1 N, numerical failure or an unexpected reset stop
 | Flag | Required | Default | Purpose |
 |---|---|---|---|
 | `--reference` | Yes | — | Timestamped reference JSON |
+| `--reference-scaling` | No | `body-height` | Whole-body-chain size estimate, Z-only scaling; `none` preserves source coordinates |
 | `--output` | Yes | — | Destination `.grf` file |
 | `--model` | No | `assets/winter_baseline_male.xml` | Body model XML |
 | `--duration` | No | Full reference | Duration in seconds, capped at reference end |
@@ -96,7 +111,21 @@ Non-foot ground support above 1 N, numerical failure or an unexpected reset stop
 | `--render` | No | Off | Replay the run after simulation |
 | `--help` | No | Off | Show command help |
 
-Toe tracking sites always use the highest paired capsule crown **height** after morphology scaling, with toe-local x/y = 0 over the gap—not a physical surface point. Toe-body attachment, heel placement and physical geometry are unchanged; site positions and the height convention are saved in preparation provenance.
+### Reference size normalization
+
+New runs default to `--reference-scaling body-height`. For every frame and both sides, sum **3D Euclidean distances** along heel → knee → hip → shoulder → head. The pooled median is the source body-size proxy. The target proxy is the mean of the same two chains at the actual morphed model's neutral tracking sites. One constant scale `s = target / source` adjusts only height:
+
+```text
+x' = x
+y' = y
+z' = s * z
+```
+
+This does not require a neutral source start or use standing height. XY, horizontal travel speed, stride width/length and timestamps stay unchanged; vertical excursions/velocities scale by `s`. Z=0 and stationary reference feet are preserved. This is an approximate landmark-based adjustment: chain lengths can vary with pose/marker placement, and Z-only scaling changes segment angles and proportions. It does not correct marker offsets, smooth noise, enforce joint limits or guarantee contact feasibility.
+
+Scaling happens in C++ preparation before both initialization and tracking. Imported JSON, physical model parameters and controller weights are untouched. Run metadata records the mode, scale, scaled axis, ground plane, source/model chain proxies and source proxy range. Degenerate/nonfinite chain segments are rejected rather than skipped. Use `--reference-scaling none` for unscaled coordinates. The former leg-only XYZ method has been removed, not retained as an option. Existing `.grf` recordings replay unchanged.
+
+Toe tracking sites use the articulated toe-body origin, local `[0,0,0]`. Heel sites retain their rear capsule endpoint X and use foot-local Y=Z=0, between the rear capsule endpoint centres. Neither site has an upward offset. These are tracking conventions, not calibrated surface-marker or sole-contact locations. Physical geometry is unchanged; both site positions and conventions are saved in preparation provenance. Heel placement participates in the body-height scale estimate; toe placement does not. Heel/toe position and velocity weights remain equal.
 
 Controller overrides are optional; defaults are defined in `src/tracking/tracking.hpp` and the tracking model builder.
 
@@ -139,7 +168,8 @@ CoP and its torsional moment are undefined for nonpositive vertical force or non
 Export produces one compressed NumPy archive directly from `.grf` recordings, without intermediate JSON or sidecar files:
 
 ```bash
-./build/data_factory export data/runs/walk.grf --output data/datasets/walk.npz
+./build/data_factory export "${GRF_DATA:?Set GRF_DATA first}/runs/walk.grf" \
+  --output "$GRF_DATA/datasets/walk.npz"
 ```
 
 ### Export arguments
@@ -179,7 +209,7 @@ These are regression tests for maintaining the importer, simulator and exporter�
 
 ```bash
 ctest --test-dir build --output-on-failure
-PYTHONDONTWRITEBYTECODE=1 data/.venv-mocap/bin/python -m unittest discover -s tests
+PYTHONDONTWRITEBYTECODE=1 .venv-mocap/bin/python -m unittest discover -s tests
 ```
 
 For a fresh recording, use `inspect`, convert with its mapping, inspect the reference preview, then run and replay the simulator. Passing regression tests does not establish that a particular recording is mapped correctly or produces realistic motion.

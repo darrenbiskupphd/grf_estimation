@@ -225,6 +225,126 @@ void uniform_30hz_regression() {
   }
 }
 
+// Four exact Euclidean edges per side, sharing the head. A bent first
+// pose has horizontal upper edges: vertical extent is not the chain length.
+ReferencePoints chain_markers(double left, double right, bool bent = false) {
+  ReferencePoints points{};
+  points[0] = 3; points[1] = -2; points[2] = 1;
+  points[3] = 3; points[4] = -2; points[5] = 4;
+  for (int side = 0; side < 2; ++side) {
+    const double edge = (side ? right : left) / 4;
+    const int chain[] = {1, 12 + side, 14 + side, 6 + side, 4 + side};
+    for (int i = 1; i < 5; ++i) {
+      for (int axis = 0; axis < 3; ++axis)
+        points[3 * chain[i] + axis] = points[3 * chain[i - 1] + axis];
+      points[3 * chain[i] + (bent && i <= 2 ? 0 : 2)] -= edge;
+    }
+  }
+  return points;
+}
+
+void body_height_scaling() {
+  ReferenceData source;
+  source.time_s = {0, .1, .4};
+  source.positions_m = {chain_markers(2, 2, true), chain_markers(2, 2),
+                        chain_markers(2, 20)};
+  source.time_origin_s = 12;
+  source.source_id = "ideal-bending";
+  source.source_path = "original.json";
+  source.metadata = {{"custom", {1, 2, 3}}};
+  // Moving pelvis and hands must retain their complete XY trajectories.
+  source.positions_m[1][0] += .2;
+  source.positions_m[2][0] += .5;
+  source.positions_m[1][24] += .3;
+  source.positions_m[1][25] -= .4;
+  source.positions_m[2][27] += .7;
+  source.positions_m[2][28] -= .6;
+  source.positions_m[1][2] += .2;
+  source.positions_m[2][26] += .5;
+  auto scaled = source;
+  const auto info = scale_reference_to_model(scaled, chain_markers(3, 5));
+  check(info["mode"] == "body-height", "scaling mode");
+  near(info["scale"], 2, "pooled median rejects one outlier");
+  near(info["source_chain_length_m"], 2, "source pooled median");
+  near(info["model_chain_length_m"], 4, "two model chains use mean");
+  near(info["source_chain_length_min_m"], 2, "minimum proxy");
+  near(info["source_chain_length_max_m"], 20, "maximum proxy");
+  check(info["scaled_axes"] == "z", "only vertical scaling advertised");
+  near(info["ground_z_m"], 0, "ground plane", 0);
+  check(!info.contains("anchor_m"), "no XY anchor metadata");
+  for (std::size_t frame = 0; frame < source.time_s.size(); ++frame)
+    for (int i = 0; i < 48; ++i)
+      near(scaled.positions_m[frame][i],
+           source.positions_m[frame][i] * (i % 3 == 2 ? 2 : 1),
+           "Z scaled about zero; every XY exactly preserved", 0);
+  check(scaled.time_s == source.time_s && scaled.time_origin_s == source.time_origin_s &&
+        scaled.source_id == source.source_id && scaled.source_path == source.source_path &&
+        scaled.metadata == source.metadata, "time and provenance untouched");
+  for (double time : {0., .05, .1, .25, .4}) {
+    const auto a = sample_reference(source, time), b = sample_reference(scaled, time);
+    for (int i = 0; i < 48; ++i)
+      near(b.velocities_m_per_s[i], (i % 3 == 2 ? 2 : 1) * a.velocities_m_per_s[i], "scaled velocities");
+  }
+  auto identity = source;
+  near(scale_reference_to_model(identity, chain_markers(2, 2))["scale"], 1, "identity scale", 0);
+  check(identity.positions_m == source.positions_m, "identity coordinates exactly preserved");
+  auto even = source;
+  even.time_s = {0, 1};
+  even.positions_m = {chain_markers(1, 3), chain_markers(5, 9)};
+  near(scale_reference_to_model(even, chain_markers(4, 4))["source_chain_length_m"],
+       4, "even pooled median averages central values");
+
+  auto planted = source;
+  planted.positions_m = {chain_markers(4, 4), chain_markers(4, 4), chain_markers(4, 4)};
+  planted.positions_m[1][0] += .5; // Pelvis moves; heels remain planted at Z=0.
+  planted.positions_m[2][0] += 1;
+  scale_reference_to_model(planted, chain_markers(2, 2));
+  for (const auto &frame : planted.positions_m)
+    for (int heel : {4, 5}) {
+      near(frame[3 * heel + 2], 0, "ground plane preserved", 0);
+      for (int axis = 0; axis < 3; ++axis)
+        near(frame[3 * heel + axis], planted.positions_m[0][3 * heel + axis],
+             "planted reference heels remain stationary", 0);
+    }
+
+  // Sliding hips along the knee-to-shoulder line must cancel across edges.
+  auto sliding = source;
+  sliding.positions_m = {chain_markers(2, 2), chain_markers(2, 2), chain_markers(2, 2)};
+  for (int frame = 0; frame < 3; ++frame)
+    for (int side = 0; side < 2; ++side)
+      sliding.positions_m[frame][3 * (14 + side) + 2] += .1 * (frame - 1);
+  near(scale_reference_to_model(sliding, chain_markers(3, 5))["scale"],
+       2, "moving collinear hips do not change whole chain scale");
+
+  for (bool model_invalid : {false, true})
+    for (int side : {0, 1})
+      for (int edge = 0; edge < 4; ++edge) {
+        const int chain[] = {4 + side, 6 + side, 14 + side, 12 + side, 1};
+        for (double distance : {0., 1e-10, 1e-9}) {
+          auto reference = source;
+          auto model = chain_markers(4, 4);
+          auto &points = model_invalid ? model : reference.positions_m.back();
+          // Use zero origin to exercise the exact inclusive threshold.
+          for (int axis = 0; axis < 3; ++axis) {
+            points[3 * chain[edge] + axis] = 0;
+            points[3 * chain[edge + 1] + axis] = 0;
+          }
+          points[3 * chain[edge + 1]] = distance;
+          rejects([&] { scale_reference_to_model(reference, model); },
+                  "every degenerate edge on either side is rejected, never skipped");
+        }
+        for (double bad : {std::numeric_limits<double>::quiet_NaN(),
+                           std::numeric_limits<double>::infinity(),
+                           -std::numeric_limits<double>::infinity()}) {
+          auto reference = source;
+          auto model = chain_markers(4, 4);
+          (model_invalid ? model : reference.positions_m.back())[3 * chain[edge + 1]] = bad;
+          rejects([&] { scale_reference_to_model(reference, model); },
+                  "nonfinite knee, hip, shoulder and head rejected");
+        }
+      }
+}
+
 void irregular_history() {
   const double times[] = {0, .04, .2, .21, .7};
   check(!reference_history_start(times, 5, 2, .3), "insufficient real history");
@@ -241,6 +361,7 @@ int main() try {
   interpolation();
   uniform_30hz_regression();
   irregular_history();
+  body_height_scaling();
   std::cout << "Reference loading/interpolation tests passed\n";
   return 0;
 } catch (const std::exception &error) {
